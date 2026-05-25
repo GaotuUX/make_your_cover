@@ -7,9 +7,6 @@
     "api/doubao.js": {
       "maxDuration": 60
     },
-    "api/jimeng/index.js": {
-      "maxDuration": 120
-    },
     "api/scheme2-generate-cover-stream.js": {
       "maxDuration": 300
     },

@@ -295,24 +295,6 @@
   box-shadow: 0 0 0 2px rgba(255, 68, 61, 0.25);
 }
 
-.schemeTwo__recommendBlock {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  width: 100%;
-  margin-top: 4px;
-}
-
-.schemeTwo__recommendReason {
-  margin: 0;
-  font-family: 'PingFang SC', sans-serif;
-  font-weight: 400;
-  font-size: 13px;
-  line-height: 20px;
-  color: var(--color-fontgy-4);
-  word-break: break-word;
-}
-
 @media (max-width: 560px) {
   .schemeTwo__pickCell {
     flex: 1 1 calc(50% - 6px);

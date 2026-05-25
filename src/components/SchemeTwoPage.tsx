@@ -14,15 +14,13 @@ import './scheme2/schemeTwo.css'
 
 const API_BASE = getApiBase()
 
-export type SchemeTwoPageProps = {
-  /** 同步当前封面预览图 URL，供导航栏导出（仅展示生成图，非 PosterPreview） */
+export type CoverPageProps = {
+  /** 同步当前封面预览图 URL，供导航栏导出 */
   onCoverPreviewUrlChange?: (url: string | null) => void
 }
 
-/**
- * 方案二:封面主题 + 模版 + 豆包文案
- */
-export function SchemeTwoPage({ onCoverPreviewUrlChange }: SchemeTwoPageProps) {
+/** 封面主题 + 模版 + 豆包文案 + 即梦生图 */
+export function SchemeTwoPage({ onCoverPreviewUrlChange }: CoverPageProps) {
   const { showApiError } = useToast()
   const [themeSelection, setThemeSelection] = useState<CoverThemeSelection | null>(null)
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null)
@@ -34,12 +32,9 @@ export function SchemeTwoPage({ onCoverPreviewUrlChange }: SchemeTwoPageProps) {
   const [randomLoading, setRandomLoading] = useState(false)
   const [coverPreviewUrl, setCoverPreviewUrl] = useState<string | null>(null)
   /** 生成流程阶段；非 idle 时禁用「生成图片」按钮 */
-  const [coverGenPhase, setCoverGenPhase] = useState<
-    'idle' | 'preprocess' | 'stream' | 'recommend'
-  >('idle')
+  const [coverGenPhase, setCoverGenPhase] = useState<'idle' | 'preprocess' | 'stream'>('idle')
   /** 即梦返回的 4 张候选图 URL，按索引对应图1～图4 */
   const [coverOptions, setCoverOptions] = useState<(string | null)[]>(() => [null, null, null, null])
-  const [recommendReason, setRecommendReason] = useState('')
   const [selectedCoverIndex, setSelectedCoverIndex] = useState<number | null>(null)
   const [scheme2ReferenceImageUrl, setScheme2ReferenceImageUrl] = useState('')
   const scheme2FileInputRef = useRef<HTMLInputElement | null>(null)
@@ -63,7 +58,6 @@ export function SchemeTwoPage({ onCoverPreviewUrlChange }: SchemeTwoPageProps) {
 
   function resetCoverSelection() {
     setCoverOptions([null, null, null, null])
-    setRecommendReason('')
     setSelectedCoverIndex(null)
     setCoverPreviewUrl(null)
   }
@@ -80,14 +74,6 @@ export function SchemeTwoPage({ onCoverPreviewUrlChange }: SchemeTwoPageProps) {
     onCoverPreviewUrlChange?.(coverPreviewUrl)
   }, [coverPreviewUrl, onCoverPreviewUrlChange])
 
-  /** 四张图齐时即梦阶段已结束；兜底 jimengDone 未送达的情况 */
-  useEffect(() => {
-    if (coverGenPhase !== 'stream') return
-    if (coverOptions.every((u) => typeof u === 'string' && u.length > 0)) {
-      setCoverGenPhase('recommend')
-    }
-  }, [coverOptions, coverGenPhase])
-
   async function handleRandomGenerate() {
     if (!randomReady || !themeSelection || !selectedTemplate) return
     setRandomLoading(true)
@@ -97,7 +83,6 @@ export function SchemeTwoPage({ onCoverPreviewUrlChange }: SchemeTwoPageProps) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          mode: 'scheme2',
           themePath,
           title: schemeTwoTitle.trim(),
           subtitle: schemeTwoSubtitle.trim() || '',
@@ -276,40 +261,7 @@ export function SchemeTwoPage({ onCoverPreviewUrlChange }: SchemeTwoPageProps) {
             })
           }
         }
-        if (event === 'jimengDone') {
-          setCoverGenPhase('recommend')
-        }
-        if (event === 'recommend' && data && typeof data === 'object' && data !== null) {
-          const d = data as {
-            recommendedIndex?: number
-            reason?: string
-            imageUrl?: string
-          }
-          if (typeof d.reason === 'string') {
-            setRecommendReason(d.reason)
-          }
-          if (typeof d.imageUrl === 'string') {
-            setCoverPreviewUrl(d.imageUrl)
-            setSelectedCoverIndex(
-              typeof d.recommendedIndex === 'number' ? d.recommendedIndex : null,
-            )
-          }
-        }
-        if (event === 'done' && data && typeof data === 'object' && data !== null) {
-          const d = data as {
-            imageUrl?: string
-            recommendedIndex?: number
-            reason?: string
-          }
-          if (typeof d.imageUrl === 'string') {
-            setCoverPreviewUrl(d.imageUrl)
-          }
-          if (typeof d.recommendedIndex === 'number') {
-            setSelectedCoverIndex((prev) => (prev === null ? d.recommendedIndex! : prev))
-          }
-          if (typeof d.reason === 'string') {
-            setRecommendReason(d.reason)
-          }
+        if (event === 'done') {
           finished = true
         }
         if (event === 'failed' || event === 'error') {
@@ -334,7 +286,7 @@ export function SchemeTwoPage({ onCoverPreviewUrlChange }: SchemeTwoPageProps) {
         if (anyImageReceived) {
           showApiError({
             title: '生成封面超时',
-            data: { hint: '图片已生成，但优选步骤未完成，可手动选择封面' },
+            data: { hint: '部分图片已生成，可手动选择封面' },
           })
         }
         return
@@ -474,9 +426,7 @@ export function SchemeTwoPage({ onCoverPreviewUrlChange }: SchemeTwoPageProps) {
                     ? '正在优化参考图…'
                     : coverGenPhase === 'stream'
                       ? '生成中…'
-                      : coverGenPhase === 'recommend'
-                        ? '正在优选封面…'
-                        : '生成图片'}
+                      : '生成图片'}
                 </button>
               </div>
               {promptFieldVisible && (
@@ -519,11 +469,6 @@ export function SchemeTwoPage({ onCoverPreviewUrlChange }: SchemeTwoPageProps) {
                     )
                   })}
                 </div>
-                {recommendReason ? (
-                  <div className="schemeTwo__recommendBlock">
-                    <p className="schemeTwo__recommendReason">{recommendReason}</p>
-                  </div>
-                ) : null}
               </div>
             )}
           </div>

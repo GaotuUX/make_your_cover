@@ -2,7 +2,6 @@ import express from 'express'
 import cors from 'cors'
 import axios from 'axios'
 import { buildScheme2DoubaoPrompt } from '../lib/doubaoScheme2.js'
-import { extractDoubaoChatText } from '../lib/extractDoubaoChatText.js'
 import { extractDoubaoResponseText } from '../lib/extractDoubaoResponseText.js'
 import { logDoubaoUsage } from '../lib/logDoubaoUsage.js'
 import { summarizeUpstreamErrorForHint } from '../lib/formatApiErrorDetail.js'
@@ -12,11 +11,6 @@ import {
   JIMENG_POLL_INTERVAL_MS,
   JIMENG_POLL_MAX_ITERATIONS,
 } from '../lib/jimengPollConstants.js'
-import {
-  SCHEME2_VISION_SYSTEM_FOUR,
-  buildScheme2VisionUserPromptFour,
-  parseVisionPickJsonFour,
-} from '../lib/scheme2VisionAudit.js'
 import {
   invalidJimengModelResponseHint,
   isAllowedJimengImageModel,
@@ -28,7 +22,6 @@ import { extractVolcRequestId } from '../lib/extractVolcRequestId.js'
 import { geminiImageEditFromPrompt } from '../lib/googleGeminiImageEdit.js'
 import { getGooglePreprocessPrompt } from '../lib/googlePreprocessPrompts.js'
 import { saveOptimizedImageBuffer } from '../lib/saveOptimizedImageBuffer.js'
-import { DEFAULT_PROMPT_FOR_DOUBAO } from '../lib/promptDefaults.js'
 import { userMessageForGooglePreprocessError } from '../lib/googlePreprocessUserMessage.js'
 import {
   DEFAULT_JIMENG_REFERENCE_PREPROCESS_PROMPT,
@@ -114,13 +107,6 @@ const DOUBAO_API_URL =
   'https://ark.cn-beijing.volces.com/api/v3/chat/completions'
 const DOUBAO_MODEL =
   (process.env.DOUBAO_MODEL || '').trim() || 'doubao-seed-1-6-flash-250828'
-/** 封面图多模态选图；不填则与 DOUBAO_MODEL 相同（需接入支持视觉的模型） */
-const DOUBAO_VISION_MODEL = (process.env.DOUBAO_VISION_MODEL || '').trim() || DOUBAO_MODEL
-/** 豆包多模态仅支持 Chat Completions，与 DOUBAO_API_URL 是否为 responses 无关 */
-const DOUBAO_CHAT_URL = DOUBAO_API_URL.includes('/chat/completions')
-  ? DOUBAO_API_URL
-  : 'https://ark.cn-beijing.volces.com/api/v3/chat/completions'
-const DOUBAO_USE_RESPONSES_API = (process.env.DOUBAO_USE_RESPONSES_API || 'true').toLowerCase() === 'true'
 
 const SYSTEM_SCHEME2_DOUBAO =
   '你是图生图提示词专家。用户消息中已给出「封面主题」「标题」「副标题」与「封面模版 prompt」四部分；你必须综合这四项生成**一条**中文画面描述正文，不要复述字段名，不要前言、分点、markdown。'
@@ -135,7 +121,7 @@ if (
 }
 if (!JIMENG_REQ_KEY) {
   console.warn(
-    '[JiMeng] 未配置 JIMENG_REQ_KEY（即梦能力 req_key），/api/jimeng 将无法正确调用 CVSync2AsyncSubmitTask。',
+    '[JiMeng] 未配置 JIMENG_REQ_KEY（即梦能力 req_key），封面生成将无法正确调用 CVSync2AsyncSubmitTask。',
   )
 }
 
@@ -253,7 +239,7 @@ async function volcPost({ url, payload, useAKSK }) {
 /**
  * 即梦:提交任务并轮询，返回多张图 URL（或 data URL）
  * @param {{ prompt: string, n?: number, imageUrls?: string[], reqKey?: string, uploadsDir?: string, jimengModel?: string, omitPromptSuffix?: boolean }} opts
- * @param opts.reqKey 不传则使用环境变量 JIMENG_REQ_KEY（方案一 /api/jimeng）
+ * @param opts.reqKey 不传则使用环境变量 JIMENG_REQ_KEY
  * @param opts.uploadsDir 存在时，将 localhost /uploads/ 参考图改为 binary_data_base64 提交（即梦云端无法拉 localhost）
  * @param opts.omitPromptSuffix 保留参数兼容；后缀已在前端拼接，后端始终使用 prompt 原文
  */
@@ -399,7 +385,7 @@ async function runJimengGenerate({
 }
 
 /**
- * 方案二:单次即梦任务 n=4（与方案一一致），返回 4 张图供豆包挑选。
+ * 单次即梦任务 n=4，返回 4 张候选图。
  * @param {{ prompt: string, imageUrls?: string[], reqKey?: string, onEachImage?: (ev: { index: number, url: string, taskId: string }) => void, jimengModel?: string, omitPromptSuffix?: boolean }} opts
  * @returns {Promise<{ imageUrls: string[], taskIds: string[] }>}
  */
@@ -481,50 +467,6 @@ async function runJimengGenerateFourSingles({
   return { imageUrls: results, taskIds }
 }
 
-async function doubaoVisionPickAmongFour(urls) {
-  const list = [urls[0], urls[1], urls[2], urls[3]].filter(Boolean)
-  if (list.length < 4) {
-    return { pass: false, chosen: 0, reason: '图片不足 4 张', raw: '' }
-  }
-  const body = {
-    model: DOUBAO_VISION_MODEL,
-    messages: [
-      { role: 'system', content: SCHEME2_VISION_SYSTEM_FOUR },
-      {
-        role: 'user',
-        content: [
-          { type: 'image_url', image_url: { url: list[0] } },
-          { type: 'image_url', image_url: { url: list[1] } },
-          { type: 'image_url', image_url: { url: list[2] } },
-          { type: 'image_url', image_url: { url: list[3] } },
-          { type: 'text', text: buildScheme2VisionUserPromptFour() },
-        ],
-      },
-    ],
-    max_tokens: 1024,
-    temperature: 0.2,
-  }
-  const resp = await axios.post(DOUBAO_CHAT_URL, body, {
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${DOUBAO_API_KEY}`,
-    },
-    timeout: 120000,
-    ...AXIOS_NO_ENV_PROXY,
-  })
-  logDoubaoUsage('scheme2-vision-pick', resp.data)
-  const text = extractDoubaoChatText(resp.data)
-  const parsed = parseVisionPickJsonFour(text)
-  if (!parsed) {
-    return { pass: false, chosen: 0, reason: 'parse_failed', raw: text }
-  }
-  let chosen = parsed.chosen
-  if (chosen === null || ![0, 1, 2, 3].includes(chosen)) {
-    chosen = 0
-  }
-  return { pass: parsed.pass, chosen, reason: parsed.reason || '', raw: text }
-}
-
 // ========== 豆包 API（随机生成文案）==========
 // Responses API:https://ark.cn-beijing.volces.com/api/v3/responses
 // Chat Completions:https://ark.cn-beijing.volces.com/api/v3/chat/completions
@@ -540,50 +482,32 @@ app.post('/api/doubao', async (req, res) => {
     })
   }
   try {
-    const mode = typeof req.body?.mode === 'string' ? req.body.mode.trim() : ''
-    const isScheme2 = mode === 'scheme2'
     const title = (req.body?.title || '').trim()
     const subtitle = (req.body?.subtitle || '').trim()
-    const theme = (req.body?.theme || '').trim()
-    const userPrompt = req.body?.userPrompt || ''
+    const themePath = (req.body?.themePath || '').trim()
+    const templatePrompt = (req.body?.templatePrompt || '').trim()
 
-    let finalPrompt
-    let maxTokens = 256
-
-    if (isScheme2) {
-      const themePath = (req.body?.themePath || '').trim()
-      const templatePrompt = (req.body?.templatePrompt || '').trim()
-      if (!templatePrompt) {
-        return res.status(400).json({
-          error: 'Bad request',
-          hint: '方案二需传递 templatePrompt（封面模版 prompt）。',
-        })
-      }
-      if (!themePath) {
-        return res.status(400).json({
-          error: 'Bad request',
-          hint: '方案二需传递 themePath（封面主题路径）。',
-        })
-      }
-      if (!title) {
-        return res.status(400).json({
-          error: 'Bad request',
-          hint: '方案二需填写封面标题。',
-        })
-      }
-      finalPrompt = buildScheme2DoubaoPrompt(themePath, title, subtitle, templatePrompt)
-      maxTokens = 768
-    } else {
-      const rawTemplate = req.body?.systemPrompt || DEFAULT_PROMPT_FOR_DOUBAO
-      const filledTemplate = rawTemplate
-        .replace(/【主题】/g, theme || '主题')
-        .replace(/【标题】/g, title || '标题')
-        .replace(/【副标题】/g, subtitle || '副标题')
-
-      finalPrompt = userPrompt
-        ? `${filledTemplate}\n\n补充说明:${userPrompt}`
-        : filledTemplate
+    if (!templatePrompt) {
+      return res.status(400).json({
+        error: 'Bad request',
+        hint: '需传递 templatePrompt（封面模版 prompt）。',
+      })
     }
+    if (!themePath) {
+      return res.status(400).json({
+        error: 'Bad request',
+        hint: '需传递 themePath（封面主题路径）。',
+      })
+    }
+    if (!title) {
+      return res.status(400).json({
+        error: 'Bad request',
+        hint: '需填写封面标题。',
+      })
+    }
+
+    const finalPrompt = buildScheme2DoubaoPrompt(themePath, title, subtitle, templatePrompt)
+    const maxTokens = 768
 
     const useResponsesApi = DOUBAO_API_URL.includes('/responses')
     const requestBody = useResponsesApi
@@ -596,9 +520,7 @@ app.post('/api/doubao', async (req, res) => {
           messages: [
             {
               role: 'system',
-              content: isScheme2
-                ? SYSTEM_SCHEME2_DOUBAO
-                : '你是一名海报设计师，擅长根据标题、副标题和主题，设计符合指定格式的画面描述。',
+              content: SYSTEM_SCHEME2_DOUBAO,
             },
             { role: 'user', content: finalPrompt },
           ],
@@ -825,60 +747,8 @@ app.post('/api/google-preprocess-reference', async (req, res) => {
   }
 })
 
-app.post('/api/jimeng', async (req, res) => {
-  const { prompt, imageUrls } = req.body || {}
-  if (!prompt) {
-    return res.status(400).json({ error: 'prompt is required' })
-  }
-  const hasBearer = Boolean(JIMENG_API_KEY)
-  const hasAKSK = Boolean(JIMENG_ACCESS_KEY_ID && JIMENG_SECRET_ACCESS_KEY && JIMENG_SERVICE)
-  if (!hasBearer && !hasAKSK) {
-    return res.status(500).json({
-      error: 'No auth configured on server',
-      hint: '请配置 JIMENG_API_KEY（Bearer）或配置 JIMENG_ACCESS_KEY_ID/JIMENG_SECRET_ACCESS_KEY/JIMENG_SERVICE（AKSK签名）并重启后端。',
-    })
-  }
-  if (!JIMENG_REQ_KEY) {
-    return res.status(500).json({
-      error: 'JIMENG_REQ_KEY is not configured on server',
-      hint: '请在 server/.env 中设置 JIMENG_REQ_KEY（即梦图片生成 4.0 对应 req_key）并重启后端。',
-    })
-  }
-
-  try {
-    const n = Math.min(4, Math.max(1, parseInt(req.body?.n, 10) || 4))
-    const { imageUrls: outUrls, taskId } = await runJimengGenerate({
-      prompt,
-      n,
-      imageUrls,
-      uploadsDir,
-      omitPromptSuffix: true,
-    })
-    return res.json({ imageUrls: outUrls, imageUrl: outUrls[0], taskId })
-  } catch (error) {
-    console.error('[JiMeng] request error', error?.response?.data || error)
-    const msg = error?.message || String(error)
-    if (msg.includes('timeout')) {
-      return res.status(504).json({
-        error: 'JiMeng task timeout',
-        detail: String(error),
-      })
-    }
-    res.status(500).json({
-      error: 'JiMeng request failed',
-      detail: error?.response?.data || String(error),
-    })
-  }
-})
-
-/** 方案二:单次即梦 n=4 → 豆包从四张中推荐一张（无重试轮次） */
+/** 单次即梦 n=4，返回 4 张候选图 */
 app.post('/api/scheme2-generate-cover', async (req, res) => {
-  if (!DOUBAO_API_KEY) {
-    return res.status(500).json({
-      error: 'Doubao not configured',
-      hint: '请配置 DOUBAO_API_KEY。',
-    })
-  }
   const hasBearer = Boolean(JIMENG_API_KEY)
   const hasAKSK = Boolean(JIMENG_ACCESS_KEY_ID && JIMENG_SECRET_ACCESS_KEY && JIMENG_SERVICE)
   if (!hasBearer && !hasAKSK) {
@@ -928,16 +798,8 @@ app.post('/api/scheme2-generate-cover', async (req, res) => {
       })
     }
 
-    const pick = await doubaoVisionPickAmongFour(four)
-    const recommendedIndex = pick.chosen
-    const imageUrl = four[recommendedIndex]
-
     return res.json({
-      imageUrl,
       imageUrls: four,
-      recommendedIndex,
-      reason: pick.reason,
-      pass: pick.pass,
       taskId: taskIds.join(','),
       taskIds,
     })
@@ -951,16 +813,10 @@ app.post('/api/scheme2-generate-cover', async (req, res) => {
 })
 
 /**
- * 方案二 SSE:单次即梦 n=4 → 任务完成后连发 4 条 processImage → 豆包推荐（无重试轮次）
+ * SSE:单次即梦 n=4 → 连发 4 条 processImage
  * POST body 与 /api/scheme2-generate-cover 相同。
  */
 app.post('/api/scheme2-generate-cover-stream', async (req, res) => {
-  if (!DOUBAO_API_KEY) {
-    return res.status(500).json({
-      error: 'Doubao not configured',
-      hint: '请配置 DOUBAO_API_KEY。',
-    })
-  }
   const hasBearer = Boolean(JIMENG_API_KEY)
   const hasAKSK = Boolean(JIMENG_ACCESS_KEY_ID && JIMENG_SECRET_ACCESS_KEY && JIMENG_SERVICE)
   if (!hasBearer && !hasAKSK) {
@@ -1037,11 +893,7 @@ app.post('/api/scheme2-generate-cover-stream', async (req, res) => {
 
     if (testMode) {
       writeSse(res, 'done', {
-        imageUrl: four[0],
         imageUrls: four,
-        recommendedIndex: 0,
-        reason: '',
-        pass: true,
         taskId: taskIds.join(','),
         taskIds,
         testMode: true,
@@ -1050,25 +902,9 @@ app.post('/api/scheme2-generate-cover-stream', async (req, res) => {
       return
     }
 
-    const pick = await doubaoVisionPickAmongFour(four)
-    const recommendedIndex = pick.chosen
-    const imageUrl = four[recommendedIndex]
-    const taskIdJoined = taskIds.join(',')
-
-    writeSse(res, 'recommend', {
-      recommendedIndex,
-      reason: pick.reason,
-      pass: pick.pass,
-      imageUrl,
-    })
-
     writeSse(res, 'done', {
-      imageUrl,
       imageUrls: four,
-      recommendedIndex,
-      reason: pick.reason,
-      pass: pick.pass,
-      taskId: taskIdJoined,
+      taskId: taskIds.join(','),
       taskIds,
     })
     res.end()

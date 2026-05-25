@@ -1,14 +1,12 @@
 /**
- * 方案二:POST /api/scheme2-generate-cover-stream（SSE）
- * 与 server/index.js 中同路由逻辑一致，供 Vercel Serverless 部署。
+ * POST /api/scheme2-generate-cover-stream（SSE）
+ * 即梦生成 4 张图后结束，不再调用豆包多模态选图。
  */
 import axios from 'axios'
 import crypto from 'crypto'
 import path from 'path'
 import { AXIOS_NO_ENV_PROXY } from '../lib/axiosNoEnvProxy.js'
 import { extractVolcRequestId } from '../lib/extractVolcRequestId.js'
-import { extractDoubaoChatText } from '../lib/extractDoubaoChatText.js'
-import { logDoubaoUsage } from '../lib/logDoubaoUsage.js'
 import { summarizeUpstreamErrorForHint } from '../lib/formatApiErrorDetail.js'
 import { normalizeScheme2ImageUrls } from '../lib/normalizeScheme2ImageUrls.js'
 import { buildJimengSyncAsyncSubmitBody } from '../lib/buildJimengSubmitBody.js'
@@ -16,11 +14,6 @@ import {
   JIMENG_POLL_INTERVAL_MS,
   JIMENG_POLL_MAX_ITERATIONS,
 } from '../lib/jimengPollConstants.js'
-import {
-  SCHEME2_VISION_SYSTEM_FOUR,
-  buildScheme2VisionUserPromptFour,
-  parseVisionPickJsonFour,
-} from '../lib/scheme2VisionAudit.js'
 import {
   invalidJimengModelResponseHint,
   isAllowedJimengImageModel,
@@ -47,17 +40,6 @@ function jimengLocalUploadsDir() {
   return path.isAbsolute(p) ? p : path.join(process.cwd(), p)
 }
 const JIMENG_UPLOADS_DIR_FOR_RESOLVE = jimengLocalUploadsDir()
-
-const DOUBAO_API_KEY = (process.env.DOUBAO_API_KEY || '').trim()
-const DOUBAO_API_URL =
-  (process.env.DOUBAO_API_URL || '').trim() ||
-  'https://ark.cn-beijing.volces.com/api/v3/responses'
-const DOUBAO_MODEL =
-  (process.env.DOUBAO_MODEL || '').trim() || 'doubao-seed-1-6-flash-250828'
-const DOUBAO_VISION_MODEL = (process.env.DOUBAO_VISION_MODEL || '').trim() || DOUBAO_MODEL
-const DOUBAO_CHAT_URL = DOUBAO_API_URL.includes('/chat/completions')
-  ? DOUBAO_API_URL
-  : 'https://ark.cn-beijing.volces.com/api/v3/chat/completions'
 
 function sha256Hex(content) {
   return crypto.createHash('sha256').update(content).digest('hex')
@@ -379,50 +361,6 @@ async function runJimengGenerateFourSingles({
   return { imageUrls: results, taskIds }
 }
 
-async function doubaoVisionPickAmongFour(urls) {
-  const list = [urls[0], urls[1], urls[2], urls[3]].filter(Boolean)
-  if (list.length < 4) {
-    return { pass: false, chosen: 0, reason: '图片不足 4 张', raw: '' }
-  }
-  const body = {
-    model: DOUBAO_VISION_MODEL,
-    messages: [
-      { role: 'system', content: SCHEME2_VISION_SYSTEM_FOUR },
-      {
-        role: 'user',
-        content: [
-          { type: 'image_url', image_url: { url: list[0] } },
-          { type: 'image_url', image_url: { url: list[1] } },
-          { type: 'image_url', image_url: { url: list[2] } },
-          { type: 'image_url', image_url: { url: list[3] } },
-          { type: 'text', text: buildScheme2VisionUserPromptFour() },
-        ],
-      },
-    ],
-    max_tokens: 1024,
-    temperature: 0.2,
-  }
-  const resp = await axios.post(DOUBAO_CHAT_URL, body, {
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${DOUBAO_API_KEY}`,
-    },
-    timeout: 120000,
-    ...AXIOS_NO_ENV_PROXY,
-  })
-  logDoubaoUsage('scheme2-stream-vision-pick', resp.data)
-  const text = extractDoubaoChatText(resp.data)
-  const parsed = parseVisionPickJsonFour(text)
-  if (!parsed) {
-    return { pass: false, chosen: 0, reason: 'parse_failed', raw: text }
-  }
-  let chosen = parsed.chosen
-  if (chosen === null || ![0, 1, 2, 3].includes(chosen)) {
-    chosen = 0
-  }
-  return { pass: parsed.pass, chosen, reason: parsed.reason || '', raw: text }
-}
-
 export const config = {
   maxDuration: 300,
   api: {
@@ -443,12 +381,6 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' })
   }
 
-  if (!DOUBAO_API_KEY) {
-    return res.status(500).json({
-      error: 'Doubao not configured',
-      hint: '请配置 DOUBAO_API_KEY。',
-    })
-  }
   const hasBearer = Boolean(JIMENG_API_KEY)
   const hasAKSK = Boolean(JIMENG_ACCESS_KEY_ID && JIMENG_SECRET_ACCESS_KEY && JIMENG_SERVICE)
   if (!hasBearer && !hasAKSK) {
@@ -525,11 +457,7 @@ export default async function handler(req, res) {
 
     if (testMode) {
       writeSse(res, 'done', {
-        imageUrl: four[0],
         imageUrls: four,
-        recommendedIndex: 0,
-        reason: '',
-        pass: true,
         taskId: taskIds.join(','),
         taskIds,
         testMode: true,
@@ -538,25 +466,9 @@ export default async function handler(req, res) {
       return
     }
 
-    const pick = await doubaoVisionPickAmongFour(four)
-    const recommendedIndex = pick.chosen
-    const imageUrl = four[recommendedIndex]
-    const taskIdJoined = taskIds.join(',')
-
-    writeSse(res, 'recommend', {
-      recommendedIndex,
-      reason: pick.reason,
-      pass: pick.pass,
-      imageUrl,
-    })
-
     writeSse(res, 'done', {
-      imageUrl,
       imageUrls: four,
-      recommendedIndex,
-      reason: pick.reason,
-      pass: pick.pass,
-      taskId: taskIdJoined,
+      taskId: taskIds.join(','),
       taskIds,
     })
     res.end()

@@ -97,55 +97,6 @@ body {
   box-sizing: border-box;
 }
 
-.demoPage__main {
-  flex: 1;
-  display: flex;
-  gap: 16px;
-  padding: 16px 24px;
-  align-items: flex-start;
-}
-
-.demoPage__design {
-  flex: 1 0 0;
-  max-width: 1024px;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.demoPage__preview {
-  flex-shrink: 0;
-}
-
-@media (max-width: 960px) {
-  .demoPage__main {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .demoPage__preview {
-    order: -1;
-  }
-}
-
-/* ========== 卡片 ========== */
-.card {
-  padding: 24px;
-  border-radius: 24px;
-  background: var(--color-pagebg-2);
-  width: 100%;
-}
-
-.card__title {
-  margin: 0 0 24px;
-  font-family: 'PingFang SC', sans-serif;
-  font-weight: 600;
-  font-size: 24px;
-  line-height: 38px;
-  color: var(--color-fontgy-1);
-}
-
 /* ========== 设计封面标题:两栏输入 ========== */
 .titleRow {
   display: flex;
@@ -190,22 +141,7 @@ body {
   box-shadow: 0 0 0 2px rgba(255, 68, 61, 0.3);
 }
 
-/* ========== 设计封面背景 ========== */
-.backgroundSection {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.backgroundSection__label {
-  font-family: 'PingFang SC', sans-serif;
-  font-weight: 500;
-  font-size: 16px;
-  line-height: 24px;
-  color: var(--color-fontgy-1);
-}
-
-/* 1、上传老师图片 */
+/* ========== 上传参考图 ========== */
 .uploadArea {
   width: 105px;
   height: 142px;
@@ -251,48 +187,6 @@ body {
   object-fit: cover;
 }
 
-/* 2、描述封面内容 */
-.describeBlock {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.describeRow {
-  display: flex;
-  gap: 8px;
-  align-items: flex-start;
-  width: 100%;
-}
-
-.describeRow__head {
-  flex: 1 0 0;
-  min-width: 0;
-}
-
-.describeRow__label {
-  font-family: 'PingFang SC', sans-serif;
-  font-weight: 500;
-  font-size: 16px;
-  line-height: 24px;
-  color: var(--color-fontgy-1);
-}
-
-.describeRow__hint {
-  font-family: 'PingFang SC', sans-serif;
-  font-size: 13px;
-  line-height: 20px;
-  color: var(--color-fontgy-4);
-  margin-top: 2px;
-}
-
-.describeRow__btns {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  flex-shrink: 0;
-}
-
 .btnSecondary {
   height: 32px;
   padding: 3px 16px;
@@ -326,6 +220,11 @@ body {
   cursor: default;
 }
 
+.btnSecondary:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .promptInput {
   width: 100%;
   min-height: 90px;
@@ -347,62 +246,4 @@ body {
 .promptInput:focus {
   outline: none;
   box-shadow: 0 0 0 2px rgba(255, 68, 61, 0.3);
-}
-
-/* 3、选择封面背景 */
-.backgroundGrid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
-}
-
-.backgroundGrid__item {
-  aspect-ratio: 60 / 80;
-  border-radius: 12px;
-  overflow: hidden;
-  background: var(--color-pagebg-1);
-  position: relative;
-  cursor: pointer;
-  border: 2px solid transparent;
-  transition: border-color 0.15s, box-shadow 0.15s;
-}
-
-.backgroundGrid__item--active {
-  border-color: var(--color-brand-500);
-  box-shadow: 0 0 0 2px rgba(255, 68, 61, 0.3);
-}
-
-.backgroundGrid__item img {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-/* ========== 封面预览卡片 ========== */
-.previewCard {
-  padding: 16px;
-  border-radius: 24px;
-  background: var(--color-pagebg-2);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.previewCard__title {
-  margin: 0;
-  font-family: 'PingFang SC', sans-serif;
-  font-weight: 600;
-  font-size: 24px;
-  line-height: 38px;
-  color: var(--color-fontgy-1);
-}
-
-.previewCard__poster {
-  width: 360px;
-  height: 480px;
-  border-radius: 12px;
-  overflow: hidden;
-  background: var(--color-pagebg-2);
 }

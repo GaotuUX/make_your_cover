@@ -4,7 +4,6 @@ import { buildScheme2DoubaoPrompt } from '../lib/doubaoScheme2.js'
 import { extractDoubaoResponseText } from '../lib/extractDoubaoResponseText.js'
 import { logDoubaoUsage } from '../lib/logDoubaoUsage.js'
 import { summarizeUpstreamErrorForHint } from '../lib/formatApiErrorDetail.js'
-import { DEFAULT_PROMPT_FOR_DOUBAO } from '../lib/promptDefaults.js'
 
 const DOUBAO_API_KEY = (process.env.DOUBAO_API_KEY || '').trim()
 const DOUBAO_API_URL =
@@ -13,7 +12,7 @@ const DOUBAO_API_URL =
 const DOUBAO_MODEL =
   (process.env.DOUBAO_MODEL || '').trim() || 'doubao-seed-1-6-flash-250828'
 
-const SYSTEM_SCHEME2 =
+const SYSTEM_PROMPT =
   '你是图生图提示词专家。用户消息中已给出「封面主题」「标题」「副标题」与「封面模版 prompt」四部分；你必须综合这四项生成**一条**中文画面描述正文，不要复述字段名，不要前言、分点、markdown。'
 
 function corsHeaders(res) {
@@ -39,50 +38,32 @@ export default async function handler(req, res) {
   }
 
   try {
-    const mode = typeof req.body?.mode === 'string' ? req.body.mode.trim() : ''
-    const isScheme2 = mode === 'scheme2'
     const title = (req.body?.title || '').trim()
     const subtitle = (req.body?.subtitle || '').trim()
-    const theme = (req.body?.theme || '').trim()
-    const userPrompt = req.body?.userPrompt || ''
+    const themePath = (req.body?.themePath || '').trim()
+    const templatePrompt = (req.body?.templatePrompt || '').trim()
 
-    let finalPrompt
-    let maxTokens = 256
-
-    if (isScheme2) {
-      const themePath = (req.body?.themePath || '').trim()
-      const templatePrompt = (req.body?.templatePrompt || '').trim()
-      if (!templatePrompt) {
-        return res.status(400).json({
-          error: 'Bad request',
-          hint: '方案二需传递 templatePrompt（封面模版 prompt）。',
-        })
-      }
-      if (!themePath) {
-        return res.status(400).json({
-          error: 'Bad request',
-          hint: '方案二需传递 themePath（封面主题路径）。',
-        })
-      }
-      if (!title) {
-        return res.status(400).json({
-          error: 'Bad request',
-          hint: '方案二需填写封面标题。',
-        })
-      }
-      finalPrompt = buildScheme2DoubaoPrompt(themePath, title, subtitle, templatePrompt)
-      maxTokens = 768
-    } else {
-      const rawTemplate = req.body?.systemPrompt || DEFAULT_PROMPT_FOR_DOUBAO
-      const filledTemplate = rawTemplate
-        .replace(/【主题】/g, theme || '主题')
-        .replace(/【标题】/g, title || '标题')
-        .replace(/【副标题】/g, subtitle || '副标题')
-
-      finalPrompt = userPrompt
-        ? `${filledTemplate}\n\n补充说明:${userPrompt}`
-        : filledTemplate
+    if (!templatePrompt) {
+      return res.status(400).json({
+        error: 'Bad request',
+        hint: '需传递 templatePrompt（封面模版 prompt）。',
+      })
     }
+    if (!themePath) {
+      return res.status(400).json({
+        error: 'Bad request',
+        hint: '需传递 themePath（封面主题路径）。',
+      })
+    }
+    if (!title) {
+      return res.status(400).json({
+        error: 'Bad request',
+        hint: '需填写封面标题。',
+      })
+    }
+
+    const finalPrompt = buildScheme2DoubaoPrompt(themePath, title, subtitle, templatePrompt)
+    const maxTokens = 768
 
     const useResponsesApi = DOUBAO_API_URL.includes('/responses')
     const requestBody = useResponsesApi
@@ -90,12 +71,7 @@ export default async function handler(req, res) {
       : {
           model: DOUBAO_MODEL,
           messages: [
-            {
-              role: 'system',
-              content: isScheme2
-                ? SYSTEM_SCHEME2
-                : '你是一名海报设计师，擅长根据标题、副标题和主题，设计符合指定格式的画面描述。',
-            },
+            { role: 'system', content: SYSTEM_PROMPT },
             { role: 'user', content: finalPrompt },
           ],
           max_tokens: maxTokens,
