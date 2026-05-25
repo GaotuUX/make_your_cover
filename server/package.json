@@ -1,0 +1,19 @@
+{
+  "name": "poster-server",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "dev": "node index.js"
+  },
+  "dependencies": {
+    "@vercel/blob": "^0.22.3",
+    "axios": "^1.7.9",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "multer": "^2.1.1"
+  }
+}
+

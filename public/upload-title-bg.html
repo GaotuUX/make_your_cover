@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <title>上传标题背景图</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 480px; margin: 2rem auto; padding: 1rem; }
+    h1 { font-size: 1.25rem; }
+    input[type="file"] { margin: 0.5rem 0; }
+    button { padding: 0.5rem 1rem; background: #1673ff; color: white; border: none; border-radius: 6px; cursor: pointer; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    #result { margin-top: 1rem; padding: 1rem; background: #f0f4f8; border-radius: 8px; word-break: break-all; font-size: 0.875rem; }
+    #result.success { background: #e8f5e9; }
+    #result.error { background: #ffebee; }
+  </style>
+</head>
+<body>
+  <h1>上传海报素材到 Vercel Blob</h1>
+  <p>支持上传标题网格图 <code>title-grid.png</code>、背景图等，上传后获得永久链接，填入 <code>VITE_TITLE_GRID_URL</code> 等环境变量。</p>
+  <input type="file" id="file" accept="image/*" />
+  <button id="btn" disabled>上传</button>
+  <div id="result"></div>
+  <script>
+    const fileInput = document.getElementById('file')
+    const btn = document.getElementById('btn')
+    const result = document.getElementById('result')
+    fileInput.onchange = () => { btn.disabled = !fileInput.files?.length }
+    btn.onclick = async () => {
+      const file = fileInput.files?.[0]
+      if (!file) return
+      btn.disabled = true
+      result.textContent = '上传中...'
+      result.className = ''
+      try {
+        const form = new FormData()
+        form.append('file', file)
+        const res = await fetch('/api/upload-image', { method: 'POST', body: form })
+        const data = await res.json()
+        if (!res.ok) throw new Error(data?.hint || data?.error || '上传失败')
+        const url = data.url
+        result.textContent = '永久链接:\n' + url
+        result.className = 'success'
+        result.innerHTML = '永久链接（可复制）:<br><a href="' + url + '" target="_blank" rel="noopener">' + url + '</a>'
+      } catch (e) {
+        result.textContent = '错误:' + e.message
+        result.className = 'error'
+      }
+      btn.disabled = false
+    }
+  </script>
+</body>
+</html>

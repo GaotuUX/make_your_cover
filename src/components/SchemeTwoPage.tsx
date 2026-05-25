@@ -1,0 +1,552 @@
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
+import type { CoverThemeSelection } from '../data/coverTemplates'
+import {
+  COVER_TEMPLATES,
+  getTemplatesForTheme,
+  templateUsesReferencePreprocess,
+} from '../data/coverTemplates'
+import { readSseStream } from '../utils/readSseStream'
+import { assertDoubaoJsonResponse } from '../utils/parseDoubaoApiResponse'
+import { getApiBase, resolvePreviewImageUrl, uploadImageAndGetUrl } from '../utils/uploadImage'
+import { useToast } from './Toast/ToastProvider'
+import { CoverThemeField } from './scheme2/CoverThemeField'
+import './scheme2/schemeTwo.css'
+
+const API_BASE = getApiBase()
+
+export type SchemeTwoPageProps = {
+  /** 同步当前封面预览图 URL，供导航栏导出（仅展示生成图，非 PosterPreview） */
+  onCoverPreviewUrlChange?: (url: string | null) => void
+}
+
+/**
+ * 方案二:封面主题 + 模版 + 豆包文案
+ */
+export function SchemeTwoPage({ onCoverPreviewUrlChange }: SchemeTwoPageProps) {
+  const { showApiError } = useToast()
+  const [themeSelection, setThemeSelection] = useState<CoverThemeSelection | null>(null)
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null)
+  const [schemeTwoTitle, setSchemeTwoTitle] = useState('')
+  const [schemeTwoSubtitle] = useState('')
+  const [schemeTwoPrompt, setSchemeTwoPrompt] = useState('')
+  /** 画面内容输入框仅在「随机生成文案」成功后展示 */
+  const [promptFieldVisible, setPromptFieldVisible] = useState(false)
+  const [randomLoading, setRandomLoading] = useState(false)
+  const [coverPreviewUrl, setCoverPreviewUrl] = useState<string | null>(null)
+  /** 生成流程阶段；非 idle 时禁用「生成图片」按钮 */
+  const [coverGenPhase, setCoverGenPhase] = useState<
+    'idle' | 'preprocess' | 'stream' | 'recommend'
+  >('idle')
+  /** 即梦返回的 4 张候选图 URL，按索引对应图1～图4 */
+  const [coverOptions, setCoverOptions] = useState<(string | null)[]>(() => [null, null, null, null])
+  const [recommendReason, setRecommendReason] = useState('')
+  const [selectedCoverIndex, setSelectedCoverIndex] = useState<number | null>(null)
+  const [scheme2ReferenceImageUrl, setScheme2ReferenceImageUrl] = useState('')
+  const scheme2FileInputRef = useRef<HTMLInputElement | null>(null)
+  const generateAbortRef = useRef<AbortController | null>(null)
+
+  const matchedTemplates = useMemo(() => getTemplatesForTheme(themeSelection), [themeSelection])
+
+  const selectedTemplate = useMemo(() => {
+    if (!selectedTemplateId) return null
+    return COVER_TEMPLATES.find((t) => t.id === selectedTemplateId) ?? null
+  }, [selectedTemplateId])
+
+  const randomReady =
+    !!themeSelection && schemeTwoTitle.trim().length > 0 && !!selectedTemplate
+
+  const needsReferenceImage = !!selectedTemplate?.requiresReferenceImage
+  const generateImageReady =
+    randomReady &&
+    schemeTwoPrompt.trim().length > 0 &&
+    (!needsReferenceImage || scheme2ReferenceImageUrl.trim().length > 0)
+
+  function resetCoverSelection() {
+    setCoverOptions([null, null, null, null])
+    setRecommendReason('')
+    setSelectedCoverIndex(null)
+    setCoverPreviewUrl(null)
+  }
+
+  useEffect(() => {
+    setSelectedTemplateId(null)
+    setSchemeTwoPrompt('')
+    setPromptFieldVisible(false)
+    setScheme2ReferenceImageUrl('')
+    resetCoverSelection()
+  }, [themeSelection])
+
+  useEffect(() => {
+    onCoverPreviewUrlChange?.(coverPreviewUrl)
+  }, [coverPreviewUrl, onCoverPreviewUrlChange])
+
+  /** 四张图齐时即梦阶段已结束；兜底 jimengDone 未送达的情况 */
+  useEffect(() => {
+    if (coverGenPhase !== 'stream') return
+    if (coverOptions.every((u) => typeof u === 'string' && u.length > 0)) {
+      setCoverGenPhase('recommend')
+    }
+  }, [coverOptions, coverGenPhase])
+
+  async function handleRandomGenerate() {
+    if (!randomReady || !themeSelection || !selectedTemplate) return
+    setRandomLoading(true)
+    try {
+      const themePath = `${themeSelection.level1} · ${themeSelection.level2} · ${themeSelection.level3}`
+      const res = await fetch(`${API_BASE}/api/doubao`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: 'scheme2',
+          themePath,
+          title: schemeTwoTitle.trim(),
+          subtitle: schemeTwoSubtitle.trim() || '',
+          templatePrompt: selectedTemplate.prompt,
+        }),
+      })
+      if (!res.ok) {
+        const nonJsonHint = assertDoubaoJsonResponse(res)
+        if (nonJsonHint) {
+          showApiError({ title: '随机生成文案失败', data: { hint: nonJsonHint }, httpStatus: res.status })
+          return
+        }
+        const data = await res.json().catch(() => ({}))
+        showApiError({ title: '随机生成文案失败', data, httpStatus: res.status })
+        return
+      }
+      const nonJsonHint = assertDoubaoJsonResponse(res)
+      if (nonJsonHint) {
+        showApiError({
+          title: '随机生成文案失败',
+          data: { hint: nonJsonHint },
+          httpStatus: res.status,
+        })
+        return
+      }
+      const data = await res.json().catch(() => ({}))
+      const text = data?.text
+      if (!text || typeof text !== 'string') {
+        showApiError({
+          title: '随机生成文案失败',
+          data: { error: 'Doubao returned empty', hint: '豆包响应中未解析到文案' },
+          httpStatus: res.status,
+        })
+        return
+      }
+      setSchemeTwoPrompt(text)
+      setPromptFieldVisible(true)
+    } catch (e) {
+      if (e instanceof Error && e.name !== 'AbortError') {
+        showApiError({
+          title: '随机生成文案失败',
+          data: { message: e.message },
+        })
+      }
+    } finally {
+      setRandomLoading(false)
+    }
+  }
+
+  const handleScheme2ReferenceUpload = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    try {
+      const url = await uploadImageAndGetUrl(file)
+      setScheme2ReferenceImageUrl(url)
+    } catch (err) {
+      showApiError({
+        title: '上传参考图失败',
+        data: { message: err instanceof Error ? err.message : String(err) },
+      })
+    }
+    e.target.value = ''
+  }
+
+  function applyCoverAtIndex(index: number) {
+    const url = coverOptions[index]
+    if (!url) return
+    setSelectedCoverIndex(index)
+    setCoverPreviewUrl(url)
+  }
+
+  async function handleGenerateCover() {
+    if (!generateImageReady || !selectedTemplate) return
+    const prompt = schemeTwoPrompt.trim()
+    if (!prompt) return
+
+    generateAbortRef.current?.abort()
+    const ac = new AbortController()
+    generateAbortRef.current = ac
+
+    resetCoverSelection()
+
+    const streamTimeoutMs = 300_000
+    const streamTimeoutId = window.setTimeout(() => ac.abort(), streamTimeoutMs)
+
+    const refTrim = scheme2ReferenceImageUrl.trim()
+    let refForJimeng = refTrim
+    let anyImageReceived = false
+
+    try {
+      setCoverGenPhase(
+        templateUsesReferencePreprocess(selectedTemplate) &&
+          selectedTemplate.requiresReferenceImage &&
+          refTrim
+          ? 'preprocess'
+          : 'stream',
+      )
+      if (
+        templateUsesReferencePreprocess(selectedTemplate) &&
+        selectedTemplate.requiresReferenceImage &&
+        refTrim
+      ) {
+        const gpRes = await fetch(`${API_BASE}/api/jimeng-preprocess-reference`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            templateId: selectedTemplate.id,
+            imageUrl: refTrim,
+            jimengModel: selectedTemplate.jimengModel,
+          }),
+          signal: ac.signal,
+        })
+        const gpData = (await gpRes.json().catch(() => ({}))) as {
+          optimizedImageUrl?: string
+          message?: string
+          detail?: string
+          hint?: string
+          error?: string
+        }
+        if (!gpRes.ok) {
+          showApiError({ title: '参考图预处理失败', data: gpData, httpStatus: gpRes.status })
+          return
+        }
+        const opt = gpData.optimizedImageUrl
+        if (!opt || typeof opt !== 'string') {
+          showApiError({
+            title: '参考图预处理失败',
+            data: { hint: '预处理未返回图片地址' },
+            httpStatus: gpRes.status,
+          })
+          return
+        }
+        refForJimeng = opt
+      }
+
+      setCoverGenPhase('stream')
+      const imageUrls =
+        selectedTemplate.requiresReferenceImage && refForJimeng ? [refForJimeng] : undefined
+
+      const res = await fetch(`${API_BASE}/api/scheme2-generate-cover-stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+        body: JSON.stringify({
+          prompt,
+          jimengModel: selectedTemplate.jimengModel,
+          ...(imageUrls ? { imageUrls } : {}),
+        }),
+        signal: ac.signal,
+      })
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        showApiError({ title: '生成封面失败', data, httpStatus: res.status })
+        return
+      }
+      const ct = res.headers.get('content-type') || ''
+      if (!ct.includes('text/event-stream')) {
+        throw new Error('未收到流式响应（Content-Type 异常）')
+      }
+
+      let finished = false
+      let streamErr: Error | null = null
+      await readSseStream(res, (event, data) => {
+        if (event === 'processImage' && data && typeof data === 'object' && data !== null) {
+          const d = data as {
+            url?: string
+            index?: number
+          }
+          if (d.url && typeof d.url === 'string' && typeof d.index === 'number' && d.index >= 0 && d.index < 4) {
+            anyImageReceived = true
+            const idx = d.index
+            setCoverOptions((prev) => {
+              const next = [...prev]
+              next[idx] = d.url as string
+              return next
+            })
+          }
+        }
+        if (event === 'jimengDone') {
+          setCoverGenPhase('recommend')
+        }
+        if (event === 'recommend' && data && typeof data === 'object' && data !== null) {
+          const d = data as {
+            recommendedIndex?: number
+            reason?: string
+            imageUrl?: string
+          }
+          if (typeof d.reason === 'string') {
+            setRecommendReason(d.reason)
+          }
+          if (typeof d.imageUrl === 'string') {
+            setCoverPreviewUrl(d.imageUrl)
+            setSelectedCoverIndex(
+              typeof d.recommendedIndex === 'number' ? d.recommendedIndex : null,
+            )
+          }
+        }
+        if (event === 'done' && data && typeof data === 'object' && data !== null) {
+          const d = data as {
+            imageUrl?: string
+            recommendedIndex?: number
+            reason?: string
+          }
+          if (typeof d.imageUrl === 'string') {
+            setCoverPreviewUrl(d.imageUrl)
+          }
+          if (typeof d.recommendedIndex === 'number') {
+            setSelectedCoverIndex((prev) => (prev === null ? d.recommendedIndex! : prev))
+          }
+          if (typeof d.reason === 'string') {
+            setRecommendReason(d.reason)
+          }
+          finished = true
+        }
+        if (event === 'failed' || event === 'error') {
+          const d = data as { hint?: string; error?: string; detail?: unknown; message?: string }
+          showApiError({ title: '生成封面失败', data: d })
+          streamErr = new Error('stream_error')
+        }
+      })
+
+      if (streamErr) {
+        throw streamErr
+      }
+      if (!finished) {
+        showApiError({
+          title: '生成封面失败',
+          data: { hint: '流式响应未正常结束，请重试' },
+        })
+        return
+      }
+    } catch (e) {
+      if (e instanceof Error && e.name === 'AbortError') {
+        if (anyImageReceived) {
+          showApiError({
+            title: '生成封面超时',
+            data: { hint: '图片已生成，但优选步骤未完成，可手动选择封面' },
+          })
+        }
+        return
+      }
+      if (!(e instanceof Error && e.message === 'stream_error')) {
+        showApiError({
+          title: '生成封面失败',
+          data: { message: e instanceof Error ? e.message : String(e) },
+        })
+      }
+    } finally {
+      window.clearTimeout(streamTimeoutId)
+      setCoverGenPhase('idle')
+      generateAbortRef.current = null
+    }
+  }
+
+  return (
+    <div className="schemeTwo">
+      <div className="schemeTwo__design">
+        <section className="schemeTwo__card">
+          <h2 className="schemeTwo__cardTitle">封面内容</h2>
+          <div className="schemeTwo__row3">
+            <CoverThemeField value={themeSelection} onChange={setThemeSelection} />
+            <div className="titleRow__field">
+              <span className="titleRow__label">2、输入封面标题（必填）</span>
+              <input
+                className="titleRow__input"
+                type="text"
+                placeholder="必填，不超过10个字"
+                value={schemeTwoTitle}
+                onChange={(e) => setSchemeTwoTitle(e.target.value)}
+                maxLength={10}
+              />
+            </div>
+          </div>
+        </section>
+
+        <section className="schemeTwo__card">
+          <h2 className="schemeTwo__cardTitle">设计封面</h2>
+
+          <div className="schemeTwo__stack">
+            <div className="schemeTwo__stackSection">
+              <span className="titleRow__label">1、选择封面模版</span>
+              {!themeSelection ? (
+                <p className="schemeTwo__templateHint">请先选择封面主题</p>
+              ) : matchedTemplates.length === 0 ? (
+                <p className="schemeTwo__templateHint">暂无与该主题关联的封面模版</p>
+              ) : (
+                <div className="schemeTwo__templateRow">
+                  {matchedTemplates.map((tpl) => (
+                    <button
+                      key={tpl.id}
+                      type="button"
+                      className={`schemeTwo__template${selectedTemplateId === tpl.id ? ' schemeTwo__template--active' : ''}`}
+                      onClick={() => {
+                        setSelectedTemplateId(tpl.id)
+                        setSchemeTwoPrompt('')
+                        setPromptFieldVisible(false)
+                        setScheme2ReferenceImageUrl('')
+                        resetCoverSelection()
+                      }}
+                      title={tpl.name}
+                      aria-label={`封面模版 ${tpl.name}`}
+                    >
+                      <img src={tpl.imageUrl} alt="" loading="lazy" />
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {selectedTemplate?.requiresReferenceImage ? (
+              <div className="schemeTwo__stackSection">
+                <span className="titleRow__label">老师参考图</span>
+                <div
+                  style={{
+                    display: 'flex',
+                    gap: 12,
+                    alignItems: 'flex-start',
+                    flexWrap: 'wrap',
+                    marginTop: 8,
+                  }}
+                >
+                  <div className="uploadArea" style={{ flexShrink: 0 }}>
+                    <input
+                      ref={scheme2FileInputRef}
+                      type="file"
+                      accept="image/*"
+                      onChange={handleScheme2ReferenceUpload}
+                      style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer' }}
+                      aria-label="上传老师参考图"
+                    />
+                    {scheme2ReferenceImageUrl ? (
+                      <div className="uploadArea__preview">
+                        <img
+                          src={resolvePreviewImageUrl(scheme2ReferenceImageUrl)}
+                          alt="老师参考图预览"
+                          referrerPolicy="no-referrer"
+                        />
+                      </div>
+                    ) : (
+                      <span style={{ fontSize: 12, color: 'var(--color-fontgy-4)' }}>点击上传</span>
+                    )}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 120 }}>
+                    <input
+                      className="titleRow__input"
+                      type="text"
+                      placeholder="或粘贴图片 URL"
+                      value={scheme2ReferenceImageUrl}
+                      onChange={(e) => setScheme2ReferenceImageUrl(e.target.value)}
+                    />
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            <div className="schemeTwo__stackSection">
+              <div className="schemeTwo__actionRow">
+                <span className="titleRow__label schemeTwo__actionRowLabel">2、设计画面内容</span>
+                <button
+                  type="button"
+                  className="btnSecondary"
+                  disabled={!randomReady || randomLoading}
+                  onClick={handleRandomGenerate}
+                >
+                  {randomLoading ? '生成中…' : '随机生成文案'}
+                </button>
+                <button
+                  type="button"
+                  className="btnPrimary"
+                  disabled={!generateImageReady || coverGenPhase !== 'idle'}
+                  onClick={handleGenerateCover}
+                >
+                  {coverGenPhase === 'preprocess'
+                    ? '正在优化参考图…'
+                    : coverGenPhase === 'stream'
+                      ? '生成中…'
+                      : coverGenPhase === 'recommend'
+                        ? '正在优选封面…'
+                        : '生成图片'}
+                </button>
+              </div>
+              {promptFieldVisible && (
+                <textarea
+                  className="promptInput schemeTwo__promptInput"
+                  placeholder="输入文案"
+                  value={schemeTwoPrompt}
+                  onChange={(e) => setSchemeTwoPrompt(e.target.value)}
+                />
+              )}
+            </div>
+
+            {promptFieldVisible && (
+              <div className="schemeTwo__stackSection schemeTwo__pickSection">
+                <span className="titleRow__label">3、选择封面</span>
+                <div className="schemeTwo__pickGrid">
+                  {[0, 1, 2, 3].map((i) => {
+                    const url = coverOptions[i]
+                    const isSel = selectedCoverIndex === i
+                    return (
+                      <button
+                        key={i}
+                        type="button"
+                        className={`schemeTwo__pickCell${url ? '' : ' schemeTwo__pickCell--empty'}${isSel ? ' schemeTwo__pickCell--selected' : ''}`}
+                        disabled={!url}
+                        onClick={() => applyCoverAtIndex(i)}
+                        aria-label={`候选封面 ${i + 1}`}
+                      >
+                        {url ? (
+                          <img
+                            src={resolvePreviewImageUrl(url)}
+                            alt=""
+                            loading="lazy"
+                            referrerPolicy="no-referrer"
+                          />
+                        ) : (
+                          <span className="schemeTwo__pickPlaceholder" aria-hidden />
+                        )}
+                      </button>
+                    )
+                  })}
+                </div>
+                {recommendReason ? (
+                  <div className="schemeTwo__recommendBlock">
+                    <p className="schemeTwo__recommendReason">{recommendReason}</p>
+                  </div>
+                ) : null}
+              </div>
+            )}
+          </div>
+        </section>
+      </div>
+
+      <aside className="schemeTwo__previewCol">
+        <div className="schemeTwo__previewCard">
+          <h2 className="schemeTwo__previewTitle">封面预览</h2>
+          {coverPreviewUrl ? (
+            <div className="schemeTwo__previewRaw">
+              <img
+                src={resolvePreviewImageUrl(coverPreviewUrl)}
+                alt=""
+                loading="lazy"
+                referrerPolicy="no-referrer"
+              />
+            </div>
+          ) : (
+            <div className="schemeTwo__previewMock" aria-hidden />
+          )}
+        </div>
+      </aside>
+    </div>
+  )
+}

@@ -1,0 +1,133 @@
+/* 对齐 Figma 200-152:三列级联、阴影与品牌色 */
+.coverThemePicker {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 8px);
+  z-index: 20;
+  /* 总宽随三列内容撑开，避免列被写死宽度 */
+  width: max-content;
+  max-width: min(100vw - 32px, 960px);
+  min-width: min-content;
+  height: 260px;
+  display: flex;
+  align-items: stretch;
+  border-radius: 12px;
+  background: var(--color-pagebg-2);
+  box-shadow: 0 2px 8px rgba(21, 23, 43, 0.06);
+  overflow: hidden;
+}
+
+.coverThemePicker__col {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  overflow-y: auto;
+  overflow-x: hidden;
+  font-family: 'PingFang SC', sans-serif;
+  font-size: 15px;
+  line-height: 22px;
+  -webkit-overflow-scrolling: touch;
+  min-height: 0;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.coverThemePicker__col::-webkit-scrollbar {
+  display: none;
+}
+
+/* 一级:左侧条 #f8f8f9，列宽随当前列最长选项文案 */
+.coverThemePicker__col--l1 {
+  flex: 0 0 auto;
+  width: max-content;
+  max-width: min(100%, 320px);
+  background: #f8f8f9;
+}
+
+.coverThemePicker__row--l1 {
+  display: block;
+  flex: 0 0 auto;
+  min-width: max-content;
+  padding: 12px 16px;
+  white-space: nowrap;
+  border: none;
+  background: #f6f7fa;
+  text-align: left;
+  cursor: pointer;
+  color: #2c2e40;
+  font-weight: 400;
+}
+
+.coverThemePicker__row--l1:hover {
+  background: #f0f1f4;
+}
+
+.coverThemePicker__row--l1.coverThemePicker__row--activeL1 {
+  background: #ffffff;
+  color: var(--color-brand-500);
+  font-weight: 500;
+}
+
+/* 二级:白底，列宽随内容 */
+.coverThemePicker__col--l2 {
+  flex: 0 0 auto;
+  width: max-content;
+  max-width: min(100%, 320px);
+  background: #ffffff;
+}
+
+.coverThemePicker__row--l2 {
+  display: block;
+  flex: 0 0 auto;
+  min-width: max-content;
+  padding: 12px 16px;
+  white-space: nowrap;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  color: #2c2e40;
+  font-weight: 400;
+}
+
+.coverThemePicker__row--l2:hover {
+  background: rgba(255, 68, 61, 0.06);
+}
+
+.coverThemePicker__row--l2.coverThemePicker__row--active {
+  color: var(--color-brand-500);
+  font-weight: 500;
+}
+
+/* 三级:左分隔线 #ebebef，列宽随内容 */
+.coverThemePicker__col--l3 {
+  flex: 0 0 auto;
+  width: max-content;
+  max-width: min(100%, 360px);
+  min-width: 0;
+  background: #ffffff;
+  border-left: 0.5px solid #ebebef;
+}
+
+.coverThemePicker__row--l3 {
+  display: block;
+  flex: 0 0 auto;
+  min-width: max-content;
+  padding: 12px 16px;
+  white-space: nowrap;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  color: var(--color-fontgy-1);
+  font-weight: 400;
+}
+
+.coverThemePicker__row--l3:hover {
+  background: rgba(255, 68, 61, 0.06);
+}
+
+.coverThemePicker__row--l3.coverThemePicker__row--active {
+  color: var(--color-brand-500);
+  font-weight: 500;
+}
