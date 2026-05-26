@@ -14,11 +14,6 @@ import './scheme2/schemeTwo.css'
 
 const API_BASE = getApiBase()
 
-export type CoverPageProps = {
-  /** 同步当前封面预览图 URL，供导航栏导出 */
-  onCoverPreviewUrlChange?: (url: string | null) => void
-}
-
 function StopIcon() {
   return (
     <svg aria-hidden="true" className="btnIcon" viewBox="0 0 16 16" focusable="false">
@@ -27,8 +22,51 @@ function StopIcon() {
   )
 }
 
+/** 将生成图绘制为 1080×1440 PNG（cover 填满画幅） */
+async function exportGeneratedImageTo1080x1440(imageUrl: string): Promise<void> {
+  const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const el = new Image()
+    if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
+      el.crossOrigin = 'anonymous'
+    }
+    el.onload = () => resolve(el)
+    el.onerror = () => reject(new Error('图片加载失败'))
+    el.src = imageUrl
+  })
+
+  const w = 1080
+  const h = 1440
+  const canvas = document.createElement('canvas')
+  canvas.width = w
+  canvas.height = h
+  const ctx = canvas.getContext('2d')
+  if (!ctx) {
+    throw new Error('无法创建画布')
+  }
+
+  ctx.fillStyle = '#ffffff'
+  ctx.fillRect(0, 0, w, h)
+
+  const iw = img.naturalWidth
+  const ih = img.naturalHeight
+  const scale = Math.max(w / iw, h / ih)
+  const dw = iw * scale
+  const dh = ih * scale
+  const dx = (w - dw) / 2
+  const dy = (h - dh) / 2
+  ctx.drawImage(img, dx, dy, dw, dh)
+
+  const dataUrl = canvas.toDataURL('image/png')
+  const link = document.createElement('a')
+  link.href = dataUrl
+  link.download = 'poster-1080x1440.png'
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+}
+
 /** 封面主题 + 模版 + 豆包文案 + 即梦生图 */
-export function SchemeTwoPage({ onCoverPreviewUrlChange }: CoverPageProps) {
+export function SchemeTwoPage() {
   const { showApiError } = useToast()
   const [themeSelection, setThemeSelection] = useState<CoverThemeSelection | null>(null)
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null)
@@ -41,9 +79,6 @@ export function SchemeTwoPage({ onCoverPreviewUrlChange }: CoverPageProps) {
   const [coverPreviewUrl, setCoverPreviewUrl] = useState<string | null>(null)
   /** 生成流程阶段；非 idle 时按钮切换为停止生成 */
   const [coverGenPhase, setCoverGenPhase] = useState<'idle' | 'preprocess' | 'queued' | 'stream'>('idle')
-  /** 即梦返回的 4 张候选图 URL，按索引对应图1～图4 */
-  const [coverOptions, setCoverOptions] = useState<(string | null)[]>(() => [null, null, null, null])
-  const [selectedCoverIndex, setSelectedCoverIndex] = useState<number | null>(null)
   const [scheme2ReferenceImageUrl, setScheme2ReferenceImageUrl] = useState('')
   const scheme2FileInputRef = useRef<HTMLInputElement | null>(null)
   const generateAbortRef = useRef<AbortController | null>(null)
@@ -66,8 +101,6 @@ export function SchemeTwoPage({ onCoverPreviewUrlChange }: CoverPageProps) {
     (!needsReferenceImage || scheme2ReferenceImageUrl.trim().length > 0)
 
   function resetCoverSelection() {
-    setCoverOptions([null, null, null, null])
-    setSelectedCoverIndex(null)
     setCoverPreviewUrl(null)
   }
 
@@ -78,10 +111,6 @@ export function SchemeTwoPage({ onCoverPreviewUrlChange }: CoverPageProps) {
     setScheme2ReferenceImageUrl('')
     resetCoverSelection()
   }, [themeSelection])
-
-  useEffect(() => {
-    onCoverPreviewUrlChange?.(coverPreviewUrl)
-  }, [coverPreviewUrl, onCoverPreviewUrlChange])
 
   async function handleRandomGenerate() {
     if (!randomReady || !themeSelection || !selectedTemplate) return
@@ -188,13 +217,6 @@ export function SchemeTwoPage({ onCoverPreviewUrlChange }: CoverPageProps) {
       })
     }
     e.target.value = ''
-  }
-
-  function applyCoverAtIndex(index: number) {
-    const url = coverOptions[index]
-    if (!url) return
-    setSelectedCoverIndex(index)
-    setCoverPreviewUrl(url)
   }
 
   async function handleGenerateCover() {
@@ -304,14 +326,9 @@ export function SchemeTwoPage({ onCoverPreviewUrlChange }: CoverPageProps) {
             url?: string
             index?: number
           }
-          if (d.url && typeof d.url === 'string' && typeof d.index === 'number' && d.index >= 0 && d.index < 4) {
+          if (d.url && typeof d.url === 'string') {
             anyImageReceived = true
-            const idx = d.index
-            setCoverOptions((prev) => {
-              const next = [...prev]
-              next[idx] = d.url as string
-              return next
-            })
+            setCoverPreviewUrl(d.url)
           }
         }
         if (event === 'done') {
@@ -342,7 +359,7 @@ export function SchemeTwoPage({ onCoverPreviewUrlChange }: CoverPageProps) {
         if (anyImageReceived) {
           showApiError({
             title: '生成封面超时',
-            data: { hint: '部分图片已生成，可手动选择封面' },
+            data: { hint: '图片已生成并展示，可继续使用或重新生成。' },
           })
         }
         return
@@ -373,6 +390,16 @@ export function SchemeTwoPage({ onCoverPreviewUrlChange }: CoverPageProps) {
       return
     }
     void handleGenerateCover()
+  }
+
+  const handleExport = async () => {
+    if (!coverPreviewUrl) return
+    try {
+      await exportGeneratedImageTo1080x1440(coverPreviewUrl)
+    } catch (error) {
+      console.error('导出海报失败', error)
+      alert('导出海报失败，请稍后重试。')
+    }
   }
 
   return (
@@ -526,46 +553,23 @@ export function SchemeTwoPage({ onCoverPreviewUrlChange }: CoverPageProps) {
                 />
               )}
             </div>
-
-            {promptFieldVisible && (
-              <div className="schemeTwo__stackSection schemeTwo__pickSection">
-                <span className="titleRow__label">3、选择封面</span>
-                <div className="schemeTwo__pickGrid">
-                  {[0, 1, 2, 3].map((i) => {
-                    const url = coverOptions[i]
-                    const isSel = selectedCoverIndex === i
-                    return (
-                      <button
-                        key={i}
-                        type="button"
-                        className={`schemeTwo__pickCell${url ? '' : ' schemeTwo__pickCell--empty'}${isSel ? ' schemeTwo__pickCell--selected' : ''}`}
-                        disabled={!url}
-                        onClick={() => applyCoverAtIndex(i)}
-                        aria-label={`候选封面 ${i + 1}`}
-                      >
-                        {url ? (
-                          <img
-                            src={resolvePreviewImageUrl(url)}
-                            alt=""
-                            loading="lazy"
-                            referrerPolicy="no-referrer"
-                          />
-                        ) : (
-                          <span className="schemeTwo__pickPlaceholder" aria-hidden />
-                        )}
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
-            )}
           </div>
         </section>
       </div>
 
       <aside className="schemeTwo__previewCol">
         <div className="schemeTwo__previewCard">
-          <h2 className="schemeTwo__previewTitle">封面预览</h2>
+          <div className="schemeTwo__previewHeader">
+            <h2 className="schemeTwo__previewTitle">封面预览</h2>
+            <button
+              type="button"
+              className="previewExportBtn"
+              onClick={handleExport}
+              disabled={!coverPreviewUrl}
+            >
+              导出封面
+            </button>
+          </div>
           {coverPreviewUrl ? (
             <div className="schemeTwo__previewRaw">
               <img

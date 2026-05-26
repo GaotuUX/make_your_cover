@@ -19,10 +19,6 @@ import {
 } from '../lib/jimengResolveReqKey.js'
 import { AXIOS_NO_ENV_PROXY } from '../lib/axiosNoEnvProxy.js'
 import { extractVolcRequestId } from '../lib/extractVolcRequestId.js'
-import { geminiImageEditFromPrompt } from '../lib/googleGeminiImageEdit.js'
-import { getGooglePreprocessPrompt } from '../lib/googlePreprocessPrompts.js'
-import { saveOptimizedImageBuffer } from '../lib/saveOptimizedImageBuffer.js'
-import { userMessageForGooglePreprocessError } from '../lib/googlePreprocessUserMessage.js'
 import {
   DEFAULT_JIMENG_REFERENCE_PREPROCESS_PROMPT,
   materializeJimengPreprocessImageUrl,
@@ -541,6 +537,43 @@ async function runJimengGenerateFourSingles({
   return { imageUrls: results, taskIds }
 }
 
+async function runJimengGenerateSingle({
+  prompt,
+  imageUrls: refImageUrls,
+  reqKey,
+  uploadsDir: uploadsDirOpt,
+  onImage,
+  shouldContinue,
+  jimengModel,
+  omitPromptSuffix,
+}) {
+  const reqKeyResolved = reqKey || JIMENG_REQ_KEY
+  if (!reqKeyResolved) {
+    throw new Error('No JIMENG_REQ_KEY')
+  }
+  if (typeof shouldContinue === 'function' && !shouldContinue()) {
+    throw new Error('JiMeng stream canceled')
+  }
+
+  const { imageUrls: urls, taskId } = await runJimengGenerate({
+    prompt,
+    n: 1,
+    imageUrls: refImageUrls,
+    reqKey: reqKeyResolved,
+    uploadsDir: uploadsDirOpt,
+    jimengModel,
+    omitPromptSuffix,
+  })
+  const url = Array.isArray(urls) ? urls[0] : ''
+  if (!url || typeof url !== 'string') {
+    throw new Error('即梦未返回有效图片')
+  }
+  if (typeof onImage === 'function') {
+    onImage({ index: 0, url, taskId })
+  }
+  return { imageUrl: url, taskId, taskIds: [taskId] }
+}
+
 // ========== 豆包 API（随机生成文案）==========
 // Responses API:https://ark.cn-beijing.volces.com/api/v3/responses
 // Chat Completions:https://ark.cn-beijing.volces.com/api/v3/chat/completions
@@ -818,90 +851,6 @@ app.post('/api/jimeng-preprocess-reference', async (req, res) => {
   }
 })
 
-/**
- * 人物参考图 Google Gemini 预处理（仅 coverTemplateGooglePreprocess.json 中配置的 templateId）。
- * 返回公网可访问的 optimizedImageUrl，供即梦 image_urls 使用。
- */
-app.post('/api/google-preprocess-reference', async (req, res) => {
-  const GEMINI_API_KEY = (process.env.GEMINI_API_KEY || '').trim()
-  if (!GEMINI_API_KEY) {
-    return res.status(500).json({
-      error: 'Gemini not configured',
-      message: '请在后端 server/.env 中配置 GEMINI_API_KEY 并重启。',
-    })
-  }
-
-  const templateId = typeof req.body?.templateId === 'string' ? req.body.templateId.trim() : ''
-  const imageUrl = typeof req.body?.imageUrl === 'string' ? req.body.imageUrl.trim() : ''
-  if (!templateId || !imageUrl) {
-    return res.status(400).json({
-      error: 'bad request',
-      message: '缺少 templateId 或 imageUrl',
-    })
-  }
-
-  const preprocessPrompt = getGooglePreprocessPrompt(templateId)
-  if (!preprocessPrompt) {
-    return res.status(400).json({
-      error: 'no preprocess for template',
-      message: '该模版未配置 Google 预处理',
-    })
-  }
-
-  if (!/^https?:\/\//i.test(imageUrl)) {
-    return res.status(400).json({
-      error: 'invalid imageUrl',
-      message: '图片地址需为 http(s) 链接',
-    })
-  }
-
-  try {
-    const imgResp = await axios.get(imageUrl, {
-      responseType: 'arraybuffer',
-      timeout: 120000,
-      maxContentLength: 25 * 1024 * 1024,
-      maxBodyLength: 25 * 1024 * 1024,
-    })
-    const imageBuffer = Buffer.from(imgResp.data)
-    const mimeType = (imgResp.headers['content-type'] || '').split(';')[0].trim() || 'image/jpeg'
-    if (!mimeType.startsWith('image/')) {
-      return res.status(400).json({
-        error: 'not an image',
-        message: '该 URL 返回的内容不是图片',
-      })
-    }
-
-    const { buffer: outBuffer, mimeType: outMime } = await geminiImageEditFromPrompt({
-      apiKey: GEMINI_API_KEY,
-      imageBuffer,
-      mimeType,
-      prompt: preprocessPrompt,
-    })
-
-    const { optimizedImageUrl } = await saveOptimizedImageBuffer({
-      buffer: outBuffer,
-      mimeType: outMime,
-      uploadsDir,
-      req,
-    })
-
-    return res.json({ optimizedImageUrl })
-  } catch (err) {
-    console.error('[google-preprocess-reference]', err?.response?.data || err)
-    const detail =
-      err?.response?.data?.error?.message ||
-      err?.response?.data?.error ||
-      err?.message ||
-      String(err)
-    const detailStr = typeof detail === 'string' ? detail : JSON.stringify(detail)
-    return res.status(500).json({
-      error: 'google preprocess failed',
-      message: userMessageForGooglePreprocessError(detailStr),
-      detail: detailStr,
-    })
-  }
-})
-
 /** 单次即梦 n=4，返回 4 张候选图 */
 app.post('/api/scheme2-generate-cover', async (req, res) => {
   const hasBearer = Boolean(JIMENG_API_KEY)
@@ -968,7 +917,7 @@ app.post('/api/scheme2-generate-cover', async (req, res) => {
 })
 
 /**
- * SSE:进程内排队后串行生成 4 个单图任务，每张完成后立即推送 processImage。
+ * SSE:进程内排队后生成 1 张图，完成后立即推送 processImage。
  * POST body 与 /api/scheme2-generate-cover 相同。
  */
 app.post('/api/scheme2-generate-cover-stream', async (req, res) => {
@@ -1017,9 +966,9 @@ app.post('/api/scheme2-generate-cover-stream', async (req, res) => {
     const { job, position, promise } = enqueueJimengStreamJob(async () => {
       if (streamClosed || !canWriteSse(res)) return
 
-      writeSse(res, 'start', { jimengModel, imageCount: 4, batch: false, serial: true, testMode })
+      writeSse(res, 'start', { jimengModel, imageCount: 1, batch: false, serial: false, testMode })
 
-      const { imageUrls: four, taskIds } = await runJimengGenerateFourSingles({
+      const { imageUrl, taskId, taskIds } = await runJimengGenerateSingle({
         prompt,
         reqKey: jimengReqKey,
         imageUrls: refImageUrls,
@@ -1027,7 +976,7 @@ app.post('/api/scheme2-generate-cover-stream', async (req, res) => {
         jimengModel,
         omitPromptSuffix: true,
         shouldContinue: () => !streamClosed && canWriteSse(res),
-        onEachImage: ({ index, url, taskId }) => {
+        onImage: ({ index, url, taskId }) => {
           if (!streamClosed && canWriteSse(res)) {
             writeSse(res, 'processImage', {
               url,
@@ -1041,22 +990,23 @@ app.post('/api/scheme2-generate-cover-stream', async (req, res) => {
 
       if (streamClosed || !canWriteSse(res)) return
 
-      writeSse(res, 'jimengDone', { taskIds, count: four.length, batch: false, serial: true })
+      writeSse(res, 'jimengDone', { taskIds, count: 1, batch: false, serial: false })
 
-      if (four.length < 4 || four.some((u) => !u)) {
+      if (!imageUrl) {
         writeSse(res, 'error', {
-          error: 'JiMeng returned fewer than 4 images',
-          hint: '即梦串行生成未凑齐 4 张，请重试。',
+          error: 'JiMeng returned no image',
+          hint: '即梦未返回有效图片，请重试。',
           taskIds,
-          count: four.filter(Boolean).length,
+          count: 0,
         })
         res.end()
         return
       }
 
       writeSse(res, 'done', {
-        imageUrls: four,
-        taskId: taskIds.join(','),
+        imageUrl,
+        imageUrls: [imageUrl],
+        taskId,
         taskIds,
         ...(testMode ? { testMode: true } : {}),
       })

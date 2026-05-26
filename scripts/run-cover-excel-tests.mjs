@@ -39,9 +39,6 @@ const templates = parseTemplates(fs.readFileSync('src/data/coverTemplates.ts', '
   (t) => !AUTO_TEST_EXCLUDED_TEMPLATE_IDS.has(t.id),
 )
 const taxonomy = parseTaxonomy(fs.readFileSync('src/data/coverThemeTaxonomy.ts', 'utf8'))
-const preprocessTemplateIds = parsePreprocessTemplateIds(
-  fs.readFileSync('src/data/coverTemplateGooglePreprocess.json', 'utf8'),
-)
 const drawing = await loadDrawing(zip, workbook.sheetPath, sheetXml)
 const teacherImagesByRow = await loadTeacherImagesByRow(zip, drawing)
 
@@ -89,7 +86,6 @@ for (const rowPlan of plan) {
       rowPlan,
       template: tpl,
       teacherImageUrl,
-      preprocess: preprocessTemplateIds.has(tpl.id),
     })
 
     const promptCol = findNextOutputColumn({
@@ -363,14 +359,6 @@ function parseTaxonomy(text) {
   return taxonomy
 }
 
-function parsePreprocessTemplateIds(jsonText) {
-  try {
-    return new Set(Object.keys(JSON.parse(jsonText)))
-  } catch {
-    return new Set()
-  }
-}
-
 function buildRunPlan({ rows, templates, taxonomy, teacherImagesByRow, startRow, endRow }) {
   const plan = []
   let currentL1 = ''
@@ -439,7 +427,7 @@ function detectImageExt(buffer) {
   return null
 }
 
-async function generateCoverForTemplate({ apiBase, rowPlan, template, teacherImageUrl, preprocess }) {
+async function generateCoverForTemplate({ apiBase, rowPlan, template, teacherImageUrl }) {
   const promptRes = await fetchJson(`${apiBase}/api/doubao`, {
     mode: 'scheme2',
     themePath: `${rowPlan.l1} · ${rowPlan.l2} · ${rowPlan.l3}`,
@@ -451,7 +439,7 @@ async function generateCoverForTemplate({ apiBase, rowPlan, template, teacherIma
   if (!prompt || typeof prompt !== 'string') throw new Error(`row ${rowPlan.row}: 豆包未返回文案`)
 
   let refUrl = teacherImageUrl
-  if (refUrl && template.requiresReferenceImage && preprocess) {
+  if (refUrl && template.requiresReferenceImage) {
     const pre = await fetchJson(`${apiBase}/api/jimeng-preprocess-reference`, {
       imageUrl: refUrl,
       jimengModel: template.jimengModel,

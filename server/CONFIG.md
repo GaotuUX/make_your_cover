@@ -35,19 +35,6 @@
 |--------|------|------|
 | `BLOB_READ_WRITE_TOKEN` | ✅（本地跑 `server` 且需上传垫图时） | [Vercel Blob](https://vercel.com/docs/storage/vercel-blob) 读写令牌；`/api/upload-image` 将文件传到 Blob 并返回 **公网 HTTPS URL**，即梦才能拉取参考图。与根目录 `api/upload-image.js` 行为一致。 |
 
-### 4. Google Gemini（部分封面模版「参考图预处理」）
-
-| 变量名 | 必填 | 说明 |
-|--------|------|------|
-| `GEMINI_API_KEY` | 使用带 Google 预处理的模版时 | [Google AI Studio](https://aistudio.google.com/) API Key；`/api/google-preprocess-reference` 调用图片模型优化人物参考图后再走即梦。 |
-| `GEMINI_IMAGE_MODEL` | 否 | 默认 `gemini-3.1-flash-image-preview`（[文档](https://ai.google.dev/gemini-api/docs/image-generation?hl=zh-cn)）。 |
-
-若接口返回 **User location is not supported**，表示当前**请求出口 IP 所在地区**不在 Google 该 API 允许范围内，需更换网络/部署区域或使用 Vertex 等其它接入方式，无法仅靠改本地业务代码绕过。
-
-预处理文案按模版 ID 配置在 `src/data/coverTemplateGooglePreprocess.json`。
-
----
-
 ## 获取豆包 API Key
 
 1. 登录 [火山引擎控制台](https://console.volcengine.com/)

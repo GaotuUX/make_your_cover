@@ -1,7 +1,5 @@
 /** 封面模版与主题绑定；图片可为外链或 public 下静态资源 */
 
-import referencePreprocessPrompts from './coverTemplateGooglePreprocess.json'
-
 const BASE = (import.meta.env.BASE_URL || '/').replace(/\/?$/, '/')
 
 export type CoverThemeSelection = {
@@ -31,9 +29,9 @@ export type CoverTemplate = {
   themeBindings: ThemeBinding[]
 }
 
-/** 该模版是否在生成前对参考图做预处理（文案见 coverTemplateGooglePreprocess.json） */
+/** 需要参考图的模版在生成前统一走即梦人像预处理。 */
 export function templateUsesReferencePreprocess(tpl: CoverTemplate): boolean {
-  return typeof referencePreprocessPrompts[tpl.id as keyof typeof referencePreprocessPrompts] === 'string'
+  return tpl.requiresReferenceImage === true
 }
 
 export function bindingMatches(sel: CoverThemeSelection, b: ThemeBinding): boolean {
@@ -61,16 +59,6 @@ export const COVER_TEMPLATES: CoverTemplate[] = [
     prompt:
       '3D 皮克斯 Q 版卡通，低幼向，可爱鲸鱼圆脸大眼，在海洋中自在游动，海底光线柔和，珊瑚海草丰富整齐，画面清新治愈，无复杂细节，生物动作缓慢呆萌，色调温暖明亮，主题文案「鲸鱼：远洋里的行者」，采用潮流派对风格艺术字体，字体笔画粗厚醒目，部分笔画带俏皮弧度或独特弯折，营造活泼、肆意、充满活力的氛围。标题位于画面顶部约 1/3 区域，环绕主体；配色：深色字体（环境色）加白色描边，在浅色背景上非常突出；排版：占据画面上方约三分之一，环绕主体。',
     themeBindings: [{ l1: '知识拓展' }],
-  },
-  {
-    id: 'tpl-subject-math-trig-identities',
-    name: '三角函数公式课堂',
-    imageUrl: `${BASE}cover-templates/tpl-subject-math-trig-identities.png`,
-    jimengModel: 'image_4_0',
-    requiresReferenceImage: true,
-    prompt:
-      '卡通化，迪士尼，柔和的 3D 动画渲染，色彩饱和度高，突出视觉吸引力。主题文案白色字体「三角函数公式」，采用潮流派对风格艺术字体，模拟真手写笔触，字体笔画粗厚醒目，形态夸张变形，部分笔画带俏皮弧度或独特弯折，营造活泼、肆意、充满活力的氛围；搭配副标题「三角恒等变换」进行排版；标题在画面上方三分之一位置，标题构图饱满；明亮整洁的高中教室，阳光从窗户洒入，参考图片的老师站在黑板前，特写镜头，手持粉笔认真讲解数学知识，黑板上写满工整清晰的三角函数公式、三角恒等变换推导过程，整体画面清新治愈。',
-    themeBindings: [{ l1: '学科知识', l2: '学科同步' }],
   },
   {
     id: 'tpl-minimal-flat-aesthetic',

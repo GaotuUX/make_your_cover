@@ -435,6 +435,43 @@ async function runJimengGenerateFourSingles({
   return { imageUrls: results, taskIds }
 }
 
+async function runJimengGenerateSingle({
+  prompt,
+  imageUrls: refImageUrls,
+  reqKey,
+  uploadsDir: uploadsDirOpt,
+  onImage,
+  shouldContinue,
+  jimengModel,
+  omitPromptSuffix,
+}) {
+  const reqKeyResolved = reqKey || JIMENG_REQ_KEY
+  if (!reqKeyResolved) {
+    throw new Error('No JIMENG_REQ_KEY')
+  }
+  if (typeof shouldContinue === 'function' && !shouldContinue()) {
+    throw new Error('JiMeng stream canceled')
+  }
+
+  const { imageUrls: urls, taskId } = await runJimengGenerate({
+    prompt,
+    n: 1,
+    imageUrls: refImageUrls,
+    reqKey: reqKeyResolved,
+    uploadsDir: uploadsDirOpt,
+    jimengModel,
+    omitPromptSuffix,
+  })
+  const url = Array.isArray(urls) ? urls[0] : ''
+  if (!url || typeof url !== 'string') {
+    throw new Error('即梦未返回有效图片')
+  }
+  if (typeof onImage === 'function') {
+    onImage({ index: 0, url, taskId })
+  }
+  return { imageUrl: url, taskId, taskIds: [taskId] }
+}
+
 export const config = {
   maxDuration: 300,
   api: {
@@ -500,9 +537,9 @@ export default async function handler(req, res) {
     const { job, position, promise } = enqueueJimengStreamJob(async () => {
       if (streamClosed || !canWriteSse(res)) return
 
-      writeSse(res, 'start', { jimengModel, imageCount: 4, batch: false, serial: true, testMode })
+      writeSse(res, 'start', { jimengModel, imageCount: 1, batch: false, serial: false, testMode })
 
-      const { imageUrls: four, taskIds } = await runJimengGenerateFourSingles({
+      const { imageUrl, taskId, taskIds } = await runJimengGenerateSingle({
         prompt,
         reqKey: jimengReqKey,
         imageUrls: refImageUrls,
@@ -510,7 +547,7 @@ export default async function handler(req, res) {
         jimengModel,
         omitPromptSuffix: true,
         shouldContinue: () => !streamClosed && canWriteSse(res),
-        onEachImage: ({ index, url, taskId }) => {
+        onImage: ({ index, url, taskId }) => {
           if (!streamClosed && canWriteSse(res)) {
             writeSse(res, 'processImage', {
               url,
@@ -524,22 +561,23 @@ export default async function handler(req, res) {
 
       if (streamClosed || !canWriteSse(res)) return
 
-      writeSse(res, 'jimengDone', { taskIds, count: four.length, batch: false, serial: true })
+      writeSse(res, 'jimengDone', { taskIds, count: 1, batch: false, serial: false })
 
-      if (four.length < 4 || four.some((u) => !u)) {
+      if (!imageUrl) {
         writeSse(res, 'error', {
-          error: 'JiMeng returned fewer than 4 images',
-          hint: '即梦串行生成未凑齐 4 张，请重试。',
+          error: 'JiMeng returned no image',
+          hint: '即梦未返回有效图片，请重试。',
           taskIds,
-          count: four.filter(Boolean).length,
+          count: 0,
         })
         res.end()
         return
       }
 
       writeSse(res, 'done', {
-        imageUrls: four,
-        taskId: taskIds.join(','),
+        imageUrl,
+        imageUrls: [imageUrl],
+        taskId,
         taskIds,
         ...(testMode ? { testMode: true } : {}),
       })

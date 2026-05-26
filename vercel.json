@@ -12,9 +12,6 @@
     },
     "api/jimeng-preprocess-reference.js": {
       "maxDuration": 300
-    },
-    "api/google-preprocess-reference.js": {
-      "maxDuration": 300
     }
   },
   "rewrites": [
