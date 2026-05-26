@@ -19,6 +19,14 @@ export type CoverPageProps = {
   onCoverPreviewUrlChange?: (url: string | null) => void
 }
 
+function StopIcon() {
+  return (
+    <svg aria-hidden="true" className="btnIcon" viewBox="0 0 16 16" focusable="false">
+      <rect x="4" y="4" width="8" height="8" rx="1.5" fill="currentColor" />
+    </svg>
+  )
+}
+
 /** 封面主题 + 模版 + 豆包文案 + 即梦生图 */
 export function SchemeTwoPage({ onCoverPreviewUrlChange }: CoverPageProps) {
   const { showApiError } = useToast()
@@ -31,14 +39,15 @@ export function SchemeTwoPage({ onCoverPreviewUrlChange }: CoverPageProps) {
   const [promptFieldVisible, setPromptFieldVisible] = useState(false)
   const [randomLoading, setRandomLoading] = useState(false)
   const [coverPreviewUrl, setCoverPreviewUrl] = useState<string | null>(null)
-  /** 生成流程阶段；非 idle 时禁用「生成图片」按钮 */
-  const [coverGenPhase, setCoverGenPhase] = useState<'idle' | 'preprocess' | 'stream'>('idle')
+  /** 生成流程阶段；非 idle 时按钮切换为停止生成 */
+  const [coverGenPhase, setCoverGenPhase] = useState<'idle' | 'preprocess' | 'queued' | 'stream'>('idle')
   /** 即梦返回的 4 张候选图 URL，按索引对应图1～图4 */
   const [coverOptions, setCoverOptions] = useState<(string | null)[]>(() => [null, null, null, null])
   const [selectedCoverIndex, setSelectedCoverIndex] = useState<number | null>(null)
   const [scheme2ReferenceImageUrl, setScheme2ReferenceImageUrl] = useState('')
   const scheme2FileInputRef = useRef<HTMLInputElement | null>(null)
   const generateAbortRef = useRef<AbortController | null>(null)
+  const generateStopReasonRef = useRef<'user' | 'timeout' | null>(null)
 
   const matchedTemplates = useMemo(() => getTemplatesForTheme(themeSelection), [themeSelection])
 
@@ -81,7 +90,7 @@ export function SchemeTwoPage({ onCoverPreviewUrlChange }: CoverPageProps) {
       const themePath = `${themeSelection.level1} · ${themeSelection.level2} · ${themeSelection.level3}`
       const res = await fetch(`${API_BASE}/api/doubao`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
         body: JSON.stringify({
           themePath,
           title: schemeTwoTitle.trim(),
@@ -99,17 +108,46 @@ export function SchemeTwoPage({ onCoverPreviewUrlChange }: CoverPageProps) {
         showApiError({ title: '随机生成文案失败', data, httpStatus: res.status })
         return
       }
-      const nonJsonHint = assertDoubaoJsonResponse(res)
-      if (nonJsonHint) {
+      const ct = res.headers.get('content-type') || ''
+      if (!ct.includes('text/event-stream')) {
         showApiError({
           title: '随机生成文案失败',
-          data: { hint: nonJsonHint },
+          data: { hint: '接口未返回流式响应，请确认后端 /api/doubao 已更新并重启。' },
           httpStatus: res.status,
         })
         return
       }
-      const data = await res.json().catch(() => ({}))
-      const text = data?.text
+
+      let text = ''
+      let finished = false
+      let streamErr: Error | null = null
+      setSchemeTwoPrompt('')
+      setPromptFieldVisible(true)
+      await readSseStream(res, (event, data) => {
+        if (event === 'delta' && data && typeof data === 'object' && data !== null) {
+          const delta = (data as { text?: unknown }).text
+          if (typeof delta === 'string' && delta) {
+            text += delta
+            setSchemeTwoPrompt((prev) => prev + delta)
+          }
+        }
+        if (event === 'done' && data && typeof data === 'object' && data !== null) {
+          finished = true
+          const finalText = (data as { text?: unknown }).text
+          if (typeof finalText === 'string' && finalText) {
+            text = finalText
+            setSchemeTwoPrompt(finalText)
+          }
+        }
+        if (event === 'error' || event === 'failed') {
+          const d = data as { hint?: string; error?: string; detail?: unknown; message?: string }
+          showApiError({ title: '随机生成文案失败', data: d })
+          streamErr = new Error('stream_error')
+        }
+      })
+      if (streamErr) {
+        throw streamErr
+      }
       if (!text || typeof text !== 'string') {
         showApiError({
           title: '随机生成文案失败',
@@ -118,10 +156,15 @@ export function SchemeTwoPage({ onCoverPreviewUrlChange }: CoverPageProps) {
         })
         return
       }
-      setSchemeTwoPrompt(text)
-      setPromptFieldVisible(true)
+      if (!finished) {
+        showApiError({
+          title: '随机生成文案失败',
+          data: { hint: '流式响应未正常结束，请重试' },
+          httpStatus: res.status,
+        })
+      }
     } catch (e) {
-      if (e instanceof Error && e.name !== 'AbortError') {
+      if (e instanceof Error && e.name !== 'AbortError' && e.message !== 'stream_error') {
         showApiError({
           title: '随机生成文案失败',
           data: { message: e.message },
@@ -162,11 +205,15 @@ export function SchemeTwoPage({ onCoverPreviewUrlChange }: CoverPageProps) {
     generateAbortRef.current?.abort()
     const ac = new AbortController()
     generateAbortRef.current = ac
+    generateStopReasonRef.current = null
 
     resetCoverSelection()
 
     const streamTimeoutMs = 300_000
-    const streamTimeoutId = window.setTimeout(() => ac.abort(), streamTimeoutMs)
+    const streamTimeoutId = window.setTimeout(() => {
+      generateStopReasonRef.current = 'timeout'
+      ac.abort()
+    }, streamTimeoutMs)
 
     const refTrim = scheme2ReferenceImageUrl.trim()
     let refForJimeng = refTrim
@@ -246,6 +293,12 @@ export function SchemeTwoPage({ onCoverPreviewUrlChange }: CoverPageProps) {
       let finished = false
       let streamErr: Error | null = null
       await readSseStream(res, (event, data) => {
+        if (event === 'queued') {
+          setCoverGenPhase('queued')
+        }
+        if (event === 'start') {
+          setCoverGenPhase('stream')
+        }
         if (event === 'processImage' && data && typeof data === 'object' && data !== null) {
           const d = data as {
             url?: string
@@ -283,6 +336,9 @@ export function SchemeTwoPage({ onCoverPreviewUrlChange }: CoverPageProps) {
       }
     } catch (e) {
       if (e instanceof Error && e.name === 'AbortError') {
+        if (generateStopReasonRef.current === 'user') {
+          return
+        }
         if (anyImageReceived) {
           showApiError({
             title: '生成封面超时',
@@ -301,7 +357,22 @@ export function SchemeTwoPage({ onCoverPreviewUrlChange }: CoverPageProps) {
       window.clearTimeout(streamTimeoutId)
       setCoverGenPhase('idle')
       generateAbortRef.current = null
+      generateStopReasonRef.current = null
     }
+  }
+
+  function handleStopGenerate() {
+    generateStopReasonRef.current = 'user'
+    generateAbortRef.current?.abort()
+    setCoverGenPhase('idle')
+  }
+
+  function handleGenerateButtonClick() {
+    if (coverGenPhase !== 'idle') {
+      handleStopGenerate()
+      return
+    }
+    void handleGenerateCover()
   }
 
   return (
@@ -419,13 +490,30 @@ export function SchemeTwoPage({ onCoverPreviewUrlChange }: CoverPageProps) {
                 <button
                   type="button"
                   className="btnPrimary"
-                  disabled={!generateImageReady || coverGenPhase !== 'idle'}
-                  onClick={handleGenerateCover}
+                  disabled={coverGenPhase === 'idle' && !generateImageReady}
+                  onClick={handleGenerateButtonClick}
                 >
                   {coverGenPhase === 'preprocess'
-                    ? '正在优化参考图…'
+                    ? (
+                        <>
+                          <StopIcon />
+                          正在优化参考图…
+                        </>
+                      )
+                    : coverGenPhase === 'queued'
+                      ? (
+                          <>
+                            <StopIcon />
+                            排队中…
+                          </>
+                        )
                     : coverGenPhase === 'stream'
-                      ? '生成中…'
+                      ? (
+                          <>
+                            <StopIcon />
+                            生成中…
+                          </>
+                        )
                       : '生成图片'}
                 </button>
               </div>

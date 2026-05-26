@@ -204,6 +204,76 @@ function writeSse(res, eventName, payload) {
   res.write(`data: ${data}\n\n`)
 }
 
+function canWriteSse(res) {
+  return !res.writableEnded && !res.destroyed
+}
+
+const jimengStreamQueue = []
+let jimengStreamQueueRunning = false
+let jimengStreamQueueSeq = 0
+
+/**
+ * 进程内 FIFO 队列：只保证单个 Node/Vercel 实例内同一时间 1 个即梦生成任务。
+ * 如需 Vercel 多实例全局唯一，需要改用 Redis/Upstash 等分布式队列或锁。
+ */
+function enqueueJimengStreamJob(run) {
+  const job = {
+    id: ++jimengStreamQueueSeq,
+    started: false,
+    canceled: false,
+    run,
+  }
+  const promise = new Promise((resolve, reject) => {
+    job.resolve = resolve
+    job.reject = reject
+  })
+  jimengStreamQueue.push(job)
+  return {
+    job,
+    position: jimengStreamQueue.length + (jimengStreamQueueRunning ? 1 : 0),
+    promise,
+  }
+}
+
+function cancelQueuedJimengStreamJob(job) {
+  if (job.started) {
+    job.canceled = true
+    return false
+  }
+  const index = jimengStreamQueue.indexOf(job)
+  if (index === -1) return false
+  jimengStreamQueue.splice(index, 1)
+  job.canceled = true
+  job.resolve?.({ canceled: true })
+  return true
+}
+
+async function drainJimengStreamQueue() {
+  if (jimengStreamQueueRunning) return
+  jimengStreamQueueRunning = true
+  try {
+    while (jimengStreamQueue.length > 0) {
+      const job = jimengStreamQueue.shift()
+      if (!job || job.canceled) {
+        job?.resolve?.({ canceled: true })
+        continue
+      }
+      job.started = true
+      try {
+        await job.run()
+        job.resolve?.({ canceled: false })
+      } catch (err) {
+        job.reject?.(err)
+      }
+    }
+  } finally {
+    jimengStreamQueueRunning = false
+    if (jimengStreamQueue.length > 0) {
+      drainJimengStreamQueue()
+    }
+  }
+}
+
 async function volcPost({ url, payload, useAKSK }) {
   const xDate = toAmzDate(new Date())
   const host = new URL(url).host
@@ -433,6 +503,7 @@ async function runJimengGenerateFourSingles({
   reqKey,
   uploadsDir: uploadsDirOpt,
   onEachImage,
+  shouldContinue,
   jimengModel,
   omitPromptSuffix,
 }) {
@@ -444,6 +515,9 @@ async function runJimengGenerateFourSingles({
   const results = new Array(4)
   const taskIds = new Array(4)
   for (let index = 0; index < 4; index++) {
+    if (typeof shouldContinue === 'function' && !shouldContinue()) {
+      throw new Error('JiMeng stream canceled')
+    }
     const { imageUrls: urls, taskId } = await runJimengGenerate({
       prompt,
       n: 1,
@@ -472,6 +546,83 @@ async function runJimengGenerateFourSingles({
 // Chat Completions:https://ark.cn-beijing.volces.com/api/v3/chat/completions
 if (!DOUBAO_API_KEY) {
   console.warn('[Doubao] 未配置 DOUBAO_API_KEY，随机生成文案功能不可用。')
+}
+
+function extractDoubaoStreamDelta(data) {
+  const choice = data?.choices?.[0]
+  const delta = choice?.delta?.content
+  if (typeof delta === 'string') return delta
+  if (Array.isArray(delta)) {
+    return delta
+      .map((part) => {
+        if (typeof part === 'string') return part
+        if (part?.text != null) return String(part.text)
+        if (typeof part?.content === 'string') return part.content
+        return ''
+      })
+      .join('')
+  }
+  const responseDelta = data?.delta
+  if (typeof responseDelta === 'string') return responseDelta
+  if (data?.type === 'response.output_text.delta' && typeof data?.delta === 'string') {
+    return data.delta
+  }
+  if (typeof data?.output_text === 'string') return data.output_text
+  return ''
+}
+
+async function streamDoubaoResponseToClient(resp, res) {
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let text = ''
+
+  for await (const chunk of resp.data) {
+    buffer += decoder.decode(chunk, { stream: true })
+    const blocks = buffer.split(/\n\n+/)
+    buffer = blocks.pop() || ''
+
+    for (const block of blocks) {
+      for (const line of block.split('\n')) {
+        const trimmed = line.trim()
+        if (!trimmed.startsWith('data:')) continue
+        const raw = trimmed.slice(5).trim()
+        if (!raw || raw === '[DONE]') continue
+        let data
+        try {
+          data = JSON.parse(raw)
+        } catch {
+          continue
+        }
+        const delta = extractDoubaoStreamDelta(data)
+        if (!delta) continue
+        text += delta
+        writeSse(res, 'delta', { text: delta })
+      }
+    }
+  }
+
+  if (buffer.trim()) {
+    const raw = buffer
+      .split('\n')
+      .map((line) => line.trim())
+      .find((line) => line.startsWith('data:'))
+      ?.slice(5)
+      .trim()
+    if (raw && raw !== '[DONE]') {
+      try {
+        const data = JSON.parse(raw)
+        const delta = extractDoubaoStreamDelta(data)
+        if (delta) {
+          text += delta
+          writeSse(res, 'delta', { text: delta })
+        }
+      } catch {
+        // Ignore incomplete trailing stream data.
+      }
+    }
+  }
+
+  writeSse(res, 'done', { text })
 }
 
 app.post('/api/doubao', async (req, res) => {
@@ -514,6 +665,7 @@ app.post('/api/doubao', async (req, res) => {
       ? {
           model: DOUBAO_MODEL,
           input: finalPrompt,
+          stream: true,
         }
       : {
           model: DOUBAO_MODEL,
@@ -525,6 +677,7 @@ app.post('/api/doubao', async (req, res) => {
             { role: 'user', content: finalPrompt },
           ],
           max_tokens: maxTokens,
+          stream: true,
         }
     const resp = await axios.post(DOUBAO_API_URL, requestBody, {
       headers: {
@@ -532,18 +685,20 @@ app.post('/api/doubao', async (req, res) => {
         Authorization: `Bearer ${DOUBAO_API_KEY}`,
       },
       timeout: 60000,
+      responseType: 'stream',
       ...AXIOS_NO_ENV_PROXY,
     })
-    logDoubaoUsage('POST /api/doubao', resp.data)
-    const text = extractDoubaoResponseText(resp.data)
-    if (!text) {
-      return res.status(500).json({
-        error: 'Doubao returned empty',
-        hint: '豆包响应中未解析到文本，请检查 DOUBAO_API_URL 与 DOUBAO_MODEL 是否匹配（建议 chat/completions + 接入点模型 ID）。',
-        detail: resp.data,
-      })
+
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
+    res.setHeader('Cache-Control', 'no-cache, no-transform')
+    res.setHeader('Connection', 'keep-alive')
+    res.setHeader('X-Accel-Buffering', 'no')
+    if (typeof res.flushHeaders === 'function') {
+      res.flushHeaders()
     }
-    res.json({ text })
+
+    await streamDoubaoResponseToClient(resp, res)
+    res.end()
   } catch (err) {
     console.error('[Doubao] request error', err?.response?.data || err)
     const detail = err?.response?.data ?? (err?.message ? String(err.message) : String(err))
@@ -813,7 +968,7 @@ app.post('/api/scheme2-generate-cover', async (req, res) => {
 })
 
 /**
- * SSE:单次即梦 n=4 → 连发 4 条 processImage
+ * SSE:进程内排队后串行生成 4 个单图任务，每张完成后立即推送 processImage。
  * POST body 与 /api/scheme2-generate-cover 相同。
  */
 app.post('/api/scheme2-generate-cover-stream', async (req, res) => {
@@ -858,70 +1013,81 @@ app.post('/api/scheme2-generate-cover-stream', async (req, res) => {
   }
 
   try {
-    writeSse(res, 'start', { jimengModel, imageCount: 4, batch: true, serial: false, testMode })
+    let streamClosed = false
+    const { job, position, promise } = enqueueJimengStreamJob(async () => {
+      if (streamClosed || !canWriteSse(res)) return
 
-    const runFour = testMode ? runJimengGenerateFourSingles : runJimengGenerateBatchFour
-    const { imageUrls: four, taskIds } = await runFour({
-      prompt,
-      reqKey: jimengReqKey,
-      imageUrls: refImageUrls,
-      uploadsDir,
-      jimengModel,
-      omitPromptSuffix: true,
-      onEachImage: ({ index, url, taskId }) => {
-        writeSse(res, 'processImage', {
-          url,
-          index,
-          taskId,
-          id: `i${index}-${taskId}`,
-        })
-      },
-    })
+      writeSse(res, 'start', { jimengModel, imageCount: 4, batch: false, serial: true, testMode })
 
-    writeSse(res, 'jimengDone', { taskIds, count: four.length, batch: true, serial: false })
-
-    if (four.length < 4 || four.some((u) => !u)) {
-      writeSse(res, 'error', {
-        error: 'JiMeng returned fewer than 4 images',
-        hint: '即梦单次任务未凑齐 4 张，请重试。',
-        taskIds,
-        count: four.filter(Boolean).length,
+      const { imageUrls: four, taskIds } = await runJimengGenerateFourSingles({
+        prompt,
+        reqKey: jimengReqKey,
+        imageUrls: refImageUrls,
+        uploadsDir,
+        jimengModel,
+        omitPromptSuffix: true,
+        shouldContinue: () => !streamClosed && canWriteSse(res),
+        onEachImage: ({ index, url, taskId }) => {
+          if (!streamClosed && canWriteSse(res)) {
+            writeSse(res, 'processImage', {
+              url,
+              index,
+              taskId,
+              id: `i${index}-${taskId}`,
+            })
+          }
+        },
       })
-      res.end()
-      return
-    }
 
-    if (testMode) {
+      if (streamClosed || !canWriteSse(res)) return
+
+      writeSse(res, 'jimengDone', { taskIds, count: four.length, batch: false, serial: true })
+
+      if (four.length < 4 || four.some((u) => !u)) {
+        writeSse(res, 'error', {
+          error: 'JiMeng returned fewer than 4 images',
+          hint: '即梦串行生成未凑齐 4 张，请重试。',
+          taskIds,
+          count: four.filter(Boolean).length,
+        })
+        res.end()
+        return
+      }
+
       writeSse(res, 'done', {
         imageUrls: four,
         taskId: taskIds.join(','),
         taskIds,
-        testMode: true,
+        ...(testMode ? { testMode: true } : {}),
       })
       res.end()
-      return
-    }
-
-    writeSse(res, 'done', {
-      imageUrls: four,
-      taskId: taskIds.join(','),
-      taskIds,
     })
-    res.end()
+
+    res.on('close', () => {
+      if (!res.writableEnded) {
+        streamClosed = true
+        cancelQueuedJimengStreamJob(job)
+      }
+    })
+
+    writeSse(res, 'queued', { position })
+    drainJimengStreamQueue()
+    await promise
   } catch (err) {
     console.error('[scheme2-generate-cover-stream]', err?.response?.data || err)
     const detail = err?.response?.data ?? String(err)
     const hint = summarizeUpstreamErrorForHint(detail)
-    writeSse(res, 'error', {
-      error: 'scheme2 generate cover failed',
-      ...(hint ? { hint } : {}),
-      detail,
-    })
-    res.end()
+    if (canWriteSse(res)) {
+      writeSse(res, 'error', {
+        error: 'scheme2 generate cover failed',
+        ...(hint ? { hint } : {}),
+        detail,
+      })
+      res.end()
+    }
   }
 })
 
 app.listen(port, () => {
   console.log(`Poster backend listening on http://localhost:${port}`)
 })
-

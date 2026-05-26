@@ -1,8 +1,6 @@
 import axios from 'axios'
 import { AXIOS_NO_ENV_PROXY } from '../lib/axiosNoEnvProxy.js'
 import { buildScheme2DoubaoPrompt } from '../lib/doubaoScheme2.js'
-import { extractDoubaoResponseText } from '../lib/extractDoubaoResponseText.js'
-import { logDoubaoUsage } from '../lib/logDoubaoUsage.js'
 import { summarizeUpstreamErrorForHint } from '../lib/formatApiErrorDetail.js'
 
 const DOUBAO_API_KEY = (process.env.DOUBAO_API_KEY || '').trim()
@@ -19,6 +17,89 @@ function corsHeaders(res) {
   res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+}
+
+function writeSse(res, eventName, payload) {
+  const data = typeof payload === 'string' ? payload : JSON.stringify(payload)
+  res.write(`event: ${eventName}\n`)
+  res.write(`data: ${data}\n\n`)
+}
+
+function extractDoubaoStreamDelta(data) {
+  const choice = data?.choices?.[0]
+  const delta = choice?.delta?.content
+  if (typeof delta === 'string') return delta
+  if (Array.isArray(delta)) {
+    return delta
+      .map((part) => {
+        if (typeof part === 'string') return part
+        if (part?.text != null) return String(part.text)
+        if (typeof part?.content === 'string') return part.content
+        return ''
+      })
+      .join('')
+  }
+  const responseDelta = data?.delta
+  if (typeof responseDelta === 'string') return responseDelta
+  if (data?.type === 'response.output_text.delta' && typeof data?.delta === 'string') {
+    return data.delta
+  }
+  if (typeof data?.output_text === 'string') return data.output_text
+  return ''
+}
+
+async function streamDoubaoResponseToClient(resp, res) {
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let text = ''
+
+  for await (const chunk of resp.data) {
+    buffer += decoder.decode(chunk, { stream: true })
+    const blocks = buffer.split(/\n\n+/)
+    buffer = blocks.pop() || ''
+
+    for (const block of blocks) {
+      for (const line of block.split('\n')) {
+        const trimmed = line.trim()
+        if (!trimmed.startsWith('data:')) continue
+        const raw = trimmed.slice(5).trim()
+        if (!raw || raw === '[DONE]') continue
+        let data
+        try {
+          data = JSON.parse(raw)
+        } catch {
+          continue
+        }
+        const delta = extractDoubaoStreamDelta(data)
+        if (!delta) continue
+        text += delta
+        writeSse(res, 'delta', { text: delta })
+      }
+    }
+  }
+
+  if (buffer.trim()) {
+    const raw = buffer
+      .split('\n')
+      .map((line) => line.trim())
+      .find((line) => line.startsWith('data:'))
+      ?.slice(5)
+      .trim()
+    if (raw && raw !== '[DONE]') {
+      try {
+        const data = JSON.parse(raw)
+        const delta = extractDoubaoStreamDelta(data)
+        if (delta) {
+          text += delta
+          writeSse(res, 'delta', { text: delta })
+        }
+      } catch {
+        // Ignore incomplete trailing stream data.
+      }
+    }
+  }
+
+  writeSse(res, 'done', { text })
 }
 
 export default async function handler(req, res) {
@@ -67,7 +148,7 @@ export default async function handler(req, res) {
 
     const useResponsesApi = DOUBAO_API_URL.includes('/responses')
     const requestBody = useResponsesApi
-      ? { model: DOUBAO_MODEL, input: finalPrompt }
+      ? { model: DOUBAO_MODEL, input: finalPrompt, stream: true }
       : {
           model: DOUBAO_MODEL,
           messages: [
@@ -75,6 +156,7 @@ export default async function handler(req, res) {
             { role: 'user', content: finalPrompt },
           ],
           max_tokens: maxTokens,
+          stream: true,
         }
 
     const resp = await axios.post(DOUBAO_API_URL, requestBody, {
@@ -83,19 +165,20 @@ export default async function handler(req, res) {
         Authorization: `Bearer ${DOUBAO_API_KEY}`,
       },
       timeout: 60000,
+      responseType: 'stream',
       ...AXIOS_NO_ENV_PROXY,
     })
-    logDoubaoUsage('api/doubao', resp.data)
 
-    const text = extractDoubaoResponseText(resp.data)
-    if (!text) {
-      return res.status(500).json({
-        error: 'Doubao returned empty',
-        hint: '豆包响应中未解析到文本，请检查 DOUBAO_API_URL 与 DOUBAO_MODEL 是否匹配（建议 chat/completions + 接入点模型 ID）。',
-        detail: resp.data,
-      })
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
+    res.setHeader('Cache-Control', 'no-cache, no-transform')
+    res.setHeader('Connection', 'keep-alive')
+    res.setHeader('X-Accel-Buffering', 'no')
+    if (typeof res.flushHeaders === 'function') {
+      res.flushHeaders()
     }
-    res.json({ text })
+
+    await streamDoubaoResponseToClient(resp, res)
+    res.end()
   } catch (err) {
     console.error('[Doubao] request error', err?.response?.data || err)
     const detail = err?.response?.data ?? (err?.message ? String(err.message) : String(err))

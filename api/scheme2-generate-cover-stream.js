@@ -117,6 +117,76 @@ function writeSse(res, eventName, payload) {
   res.write(`data: ${data}\n\n`)
 }
 
+function canWriteSse(res) {
+  return !res.writableEnded && !res.destroyed
+}
+
+const jimengStreamQueue = []
+let jimengStreamQueueRunning = false
+let jimengStreamQueueSeq = 0
+
+/**
+ * In-process FIFO only. This serializes JiMeng generation inside one Node/Vercel
+ * instance; it is not a distributed lock across multiple serverless instances.
+ */
+function enqueueJimengStreamJob(run) {
+  const job = {
+    id: ++jimengStreamQueueSeq,
+    started: false,
+    canceled: false,
+    run,
+  }
+  const promise = new Promise((resolve, reject) => {
+    job.resolve = resolve
+    job.reject = reject
+  })
+  jimengStreamQueue.push(job)
+  return {
+    job,
+    position: jimengStreamQueue.length + (jimengStreamQueueRunning ? 1 : 0),
+    promise,
+  }
+}
+
+function cancelQueuedJimengStreamJob(job) {
+  if (job.started) {
+    job.canceled = true
+    return false
+  }
+  const index = jimengStreamQueue.indexOf(job)
+  if (index === -1) return false
+  jimengStreamQueue.splice(index, 1)
+  job.canceled = true
+  job.resolve?.({ canceled: true })
+  return true
+}
+
+async function drainJimengStreamQueue() {
+  if (jimengStreamQueueRunning) return
+  jimengStreamQueueRunning = true
+  try {
+    while (jimengStreamQueue.length > 0) {
+      const job = jimengStreamQueue.shift()
+      if (!job || job.canceled) {
+        job?.resolve?.({ canceled: true })
+        continue
+      }
+      job.started = true
+      try {
+        await job.run()
+        job.resolve?.({ canceled: false })
+      } catch (err) {
+        job.reject?.(err)
+      }
+    }
+  } finally {
+    jimengStreamQueueRunning = false
+    if (jimengStreamQueue.length > 0) {
+      drainJimengStreamQueue()
+    }
+  }
+}
+
 async function volcPost({ url, payload, useAKSK }) {
   const xDate = toAmzDate(new Date())
   const host = new URL(url).host
@@ -327,6 +397,7 @@ async function runJimengGenerateFourSingles({
   reqKey,
   uploadsDir: uploadsDirOpt,
   onEachImage,
+  shouldContinue,
   jimengModel,
   omitPromptSuffix,
 }) {
@@ -338,6 +409,9 @@ async function runJimengGenerateFourSingles({
   const results = new Array(4)
   const taskIds = new Array(4)
   for (let index = 0; index < 4; index++) {
+    if (typeof shouldContinue === 'function' && !shouldContinue()) {
+      throw new Error('JiMeng stream canceled')
+    }
     const { imageUrls: urls, taskId } = await runJimengGenerate({
       prompt,
       n: 1,
@@ -422,65 +496,77 @@ export default async function handler(req, res) {
   }
 
   try {
-    writeSse(res, 'start', { jimengModel, imageCount: 4, batch: true, serial: false, testMode })
+    let streamClosed = false
+    const { job, position, promise } = enqueueJimengStreamJob(async () => {
+      if (streamClosed || !canWriteSse(res)) return
 
-    const runFour = testMode ? runJimengGenerateFourSingles : runJimengGenerateBatchFour
-    const { imageUrls: four, taskIds } = await runFour({
-      prompt,
-      reqKey: jimengReqKey,
-      imageUrls: refImageUrls,
-      uploadsDir: JIMENG_UPLOADS_DIR_FOR_RESOLVE,
-      jimengModel,
-      omitPromptSuffix: true,
-      onEachImage: ({ index, url, taskId }) => {
-        writeSse(res, 'processImage', {
-          url,
-          index,
-          taskId,
-          id: `i${index}-${taskId}`,
-        })
-      },
-    })
+      writeSse(res, 'start', { jimengModel, imageCount: 4, batch: false, serial: true, testMode })
 
-    writeSse(res, 'jimengDone', { taskIds, count: four.length, batch: true, serial: false })
-
-    if (four.length < 4 || four.some((u) => !u)) {
-      writeSse(res, 'error', {
-        error: 'JiMeng returned fewer than 4 images',
-        hint: '即梦单次任务未凑齐 4 张，请重试。',
-        taskIds,
-        count: four.filter(Boolean).length,
+      const { imageUrls: four, taskIds } = await runJimengGenerateFourSingles({
+        prompt,
+        reqKey: jimengReqKey,
+        imageUrls: refImageUrls,
+        uploadsDir: JIMENG_UPLOADS_DIR_FOR_RESOLVE,
+        jimengModel,
+        omitPromptSuffix: true,
+        shouldContinue: () => !streamClosed && canWriteSse(res),
+        onEachImage: ({ index, url, taskId }) => {
+          if (!streamClosed && canWriteSse(res)) {
+            writeSse(res, 'processImage', {
+              url,
+              index,
+              taskId,
+              id: `i${index}-${taskId}`,
+            })
+          }
+        },
       })
-      res.end()
-      return
-    }
 
-    if (testMode) {
+      if (streamClosed || !canWriteSse(res)) return
+
+      writeSse(res, 'jimengDone', { taskIds, count: four.length, batch: false, serial: true })
+
+      if (four.length < 4 || four.some((u) => !u)) {
+        writeSse(res, 'error', {
+          error: 'JiMeng returned fewer than 4 images',
+          hint: '即梦串行生成未凑齐 4 张，请重试。',
+          taskIds,
+          count: four.filter(Boolean).length,
+        })
+        res.end()
+        return
+      }
+
       writeSse(res, 'done', {
         imageUrls: four,
         taskId: taskIds.join(','),
         taskIds,
-        testMode: true,
+        ...(testMode ? { testMode: true } : {}),
       })
       res.end()
-      return
-    }
-
-    writeSse(res, 'done', {
-      imageUrls: four,
-      taskId: taskIds.join(','),
-      taskIds,
     })
-    res.end()
+
+    res.on('close', () => {
+      if (!res.writableEnded) {
+        streamClosed = true
+        cancelQueuedJimengStreamJob(job)
+      }
+    })
+
+    writeSse(res, 'queued', { position })
+    drainJimengStreamQueue()
+    await promise
   } catch (err) {
     console.error('[scheme2-generate-cover-stream]', err?.response?.data || err)
     const detail = err?.response?.data ?? String(err)
     const hint = summarizeUpstreamErrorForHint(detail)
-    writeSse(res, 'error', {
-      error: 'scheme2 generate cover failed',
-      ...(hint ? { hint } : {}),
-      detail,
-    })
-    res.end()
+    if (canWriteSse(res)) {
+      writeSse(res, 'error', {
+        error: 'scheme2 generate cover failed',
+        ...(hint ? { hint } : {}),
+        detail,
+      })
+      res.end()
+    }
   }
 }
