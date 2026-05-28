@@ -7,7 +7,9 @@
     "node": "20.x"
   },
   "scripts": {
-    "dev": "vite",
+    "dev": "sh -c 'npm --prefix server run dev & server_pid=$!; vite & vite_pid=$!; trap \"kill $server_pid $vite_pid 2>/dev/null\" INT TERM EXIT; wait'",
+    "dev:frontend": "vite",
+    "dev:server": "npm --prefix server run dev",
     "build": "tsc -b && vite build",
     "upload:title-bg": "node scripts/upload-title-bg.mjs",
     "upload:title-grid": "node scripts/upload-title-grid.mjs",

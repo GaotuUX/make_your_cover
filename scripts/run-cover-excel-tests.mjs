@@ -9,8 +9,12 @@ const DEFAULT_SHEET = '三级标签对应内容明细'
 const DEFAULT_API_BASE = 'http://localhost:3000'
 /** 已从产品模版库移除的 id：自动化测试永不遍历（即使 TS 误合并旧块也会被过滤） */
 const AUTO_TEST_EXCLUDED_TEMPLATE_IDS = new Set(['tpl-campus-national-day-travel'])
-const TEACHER_IMAGE_COLUMN = 4
-const OUTPUT_START_COLUMN = 5
+const L1_COLUMN = 1
+const L2_COLUMN = 2
+const L3_COLUMN = 3
+const TITLE_COLUMN = 4
+const TEACHER_IMAGE_COLUMN = 5
+const OUTPUT_START_COLUMN = 6
 const IMAGE_WIDTH_PX = 160
 const IMAGE_HEIGHT_PX = 213
 const EMU_PER_PX = 9525
@@ -363,13 +367,15 @@ function buildRunPlan({ rows, templates, taxonomy, teacherImagesByRow, startRow,
   const plan = []
   let currentL1 = ''
   let currentL2 = ''
+  let currentL3 = ''
   for (let row = 2; row <= endRow; row++) {
     const cells = rows.get(row) || new Map()
-    if (cells.get(1)) currentL1 = cells.get(1)
-    if (cells.get(2)) currentL2 = cells.get(2)
+    if (cells.get(L1_COLUMN)) currentL1 = cells.get(L1_COLUMN)
+    if (cells.get(L2_COLUMN)) currentL2 = cells.get(L2_COLUMN)
+    if (cells.get(L3_COLUMN)) currentL3 = cells.get(L3_COLUMN)
     if (row < startRow) continue
-    const title = (cells.get(3) || '').trim()
-    const l3 = taxonomy.get(`${currentL1}\u0000${currentL2}`)?.[0] || currentL2
+    const title = (cells.get(TITLE_COLUMN) || '').trim()
+    const l3 = currentL3 || taxonomy.get(`${currentL1}\u0000${currentL2}`)?.[0] || currentL2
     const matched = templates.filter((tpl) =>
       tpl.bindings.some((b) =>
         b.l1 === currentL1 &&

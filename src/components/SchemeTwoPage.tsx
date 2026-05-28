@@ -508,7 +508,7 @@ export function SchemeTwoPage() {
                 <span className="titleRow__label schemeTwo__actionRowLabel">2、设计画面内容</span>
                 <button
                   type="button"
-                  className="btnSecondary"
+                  className="btnPrimary"
                   disabled={!randomReady || randomLoading}
                   onClick={handleRandomGenerate}
                 >

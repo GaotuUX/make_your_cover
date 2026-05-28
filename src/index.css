@@ -69,6 +69,29 @@ body {
   height: 1px;
 }
 
+.batchToggle {
+  height: 32px;
+  padding: 3px 16px;
+  border-radius: 16px;
+  border: none;
+  background: var(--color-brand-50);
+  color: var(--color-brand-500);
+  font-family: 'PingFang SC', sans-serif;
+  font-size: 12px;
+  line-height: 18px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, transform 0.15s;
+}
+
+.batchToggle:hover {
+  background: #ffe6e4;
+}
+
+.batchToggle:active {
+  transform: scale(0.98);
+}
+
 /* ========== 主内容区 ========== */
 .demoPage {
   min-height: 100%;
@@ -238,4 +261,520 @@ body {
 .promptInput:focus {
   outline: none;
   box-shadow: 0 0 0 2px rgba(255, 68, 61, 0.3);
+}
+
+/* ========== 批量生成页 ========== */
+.uploadPage {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(360px, 671px) minmax(260px, 1fr);
+  gap: 76px;
+  width: 100%;
+  min-width: 0;
+  padding: 86px 54px 48px;
+  background: var(--color-pagebg-1);
+  align-items: start;
+}
+
+.uploadPage__example {
+  width: 100%;
+  min-width: 0;
+}
+
+.uploadExample {
+  width: 100%;
+  max-width: 671px;
+  height: 527px;
+  overflow: hidden;
+  background: #ffffff;
+  box-shadow: 0 0 0 1px #222;
+  font-family: 'PingFang SC', sans-serif;
+  font-size: 12px;
+  color: #111111;
+}
+
+.uploadExample__header,
+.uploadExample__row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.45fr 4fr 1fr;
+}
+
+.uploadExample__header span {
+  min-width: 0;
+  padding: 4px 6px;
+  border-right: 1px solid #222;
+  border-bottom: 1px solid #222;
+  background: #00bfff;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.uploadExample__row span {
+  min-height: 96px;
+  min-width: 0;
+  padding: 12px 8px;
+  border-right: 1px solid #222;
+  border-bottom: 1px solid #222;
+  display: flex;
+  align-items: center;
+  overflow-wrap: anywhere;
+}
+
+.uploadExample__titleCell {
+  background: #fff314;
+}
+
+.uploadPage__panel {
+  padding-top: 0;
+  min-width: 0;
+}
+
+.uploadPage__title {
+  margin: 0 0 12px;
+  font-family: 'PingFang SC', sans-serif;
+  font-weight: 600;
+  font-size: 24px;
+  line-height: 34px;
+  color: var(--color-fontgy-1);
+}
+
+.uploadPage__desc {
+  margin: 0 0 28px;
+  font-family: 'PingFang SC', sans-serif;
+  font-size: 14px;
+  line-height: 22px;
+  color: #919296;
+}
+
+.uploadPage__fileInput {
+  display: none;
+}
+
+.uploadPage__button {
+  min-width: 154px;
+  height: 44px;
+  padding: 10px 45px;
+  border-radius: 22px;
+  border: none;
+  background: var(--color-brand-500);
+  color: #ffffff;
+  font-family: 'PingFang SC', sans-serif;
+  font-size: 16px;
+  line-height: 24px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.uploadPage__fileName {
+  margin: 14px 0 0;
+  font-family: 'PingFang SC', sans-serif;
+  font-size: 14px;
+  line-height: 22px;
+  color: var(--color-fontgy-1);
+}
+
+.batchPage {
+  flex: 1;
+  min-width: 0;
+  padding: 38px 38px 56px;
+  background: var(--color-pagebg-1);
+}
+
+.batchPage__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 36px;
+}
+
+.batchPage__meta {
+  display: flex;
+  align-items: baseline;
+  gap: 18px;
+  min-width: 0;
+}
+
+.batchPage__meta h2 {
+  margin: 0;
+  max-width: min(560px, 56vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: 'PingFang SC', sans-serif;
+  font-size: 24px;
+  line-height: 34px;
+  font-weight: 600;
+  color: var(--color-fontgy-1);
+}
+
+.batchPage__meta span {
+  font-size: 16px;
+  line-height: 24px;
+  color: #919296;
+  white-space: nowrap;
+}
+
+.batchPage__actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.batchPrimaryButton {
+  width: 132px;
+  height: 38px;
+  border: none;
+  border-radius: 19px;
+  background: var(--color-brand-500);
+  color: #ffffff;
+  font-family: 'PingFang SC', sans-serif;
+  font-size: 14px;
+  line-height: 22px;
+  cursor: pointer;
+  transition: opacity 0.15s, transform 0.15s;
+}
+
+.batchPrimaryButton:hover:not(:disabled) {
+  opacity: 0.88;
+}
+
+.batchPrimaryButton:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.batchPrimaryButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.batchTableWrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.batchTable {
+  width: 1211px;
+  border-collapse: collapse;
+  table-layout: fixed;
+  background: transparent;
+  color: rgba(0, 0, 0, 0.85);
+  font-family: 'PingFang SC', Roboto, sans-serif;
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.batchTable th {
+  height: 56px;
+  padding: 16px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  background: #fafafa;
+  font-weight: 500;
+  text-align: center;
+  color: #393b42;
+}
+
+.batchTable td {
+  height: 56px;
+  padding: 16px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  vertical-align: middle;
+  overflow: visible;
+}
+
+.batchTable th:nth-child(1),
+.batchTable td:nth-child(1),
+.batchTable th:nth-child(2),
+.batchTable td:nth-child(2),
+.batchTable th:nth-child(3),
+.batchTable td:nth-child(3) {
+  width: 120px;
+}
+
+.batchTable th:nth-child(4),
+.batchTable td:nth-child(4) {
+  width: 180px;
+}
+
+.batchTable th:nth-child(5),
+.batchTable td:nth-child(5) {
+  width: 160px;
+  text-align: center;
+}
+
+.batchTable th:nth-child(6),
+.batchTable td:nth-child(6) {
+  width: 232px;
+}
+
+.batchTable th:nth-child(7),
+.batchTable td:nth-child(7) {
+  width: 175px;
+}
+
+.batchTable th:nth-child(8),
+.batchTable td:nth-child(8) {
+  width: 104px;
+  text-align: center;
+}
+
+.batchTable__row--success td {
+  height: 168px;
+}
+
+.batchTitleInput {
+  width: 100%;
+  min-height: 38px;
+  max-height: 78px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: rgba(0, 0, 0, 0.85);
+  font-family: 'PingFang SC', sans-serif;
+  font-size: 14px;
+  line-height: 22px;
+  resize: none;
+}
+
+.batchTitleInput:focus {
+  outline: none;
+  border-color: #adc6ff;
+  background: #ffffff;
+}
+
+.batchLink,
+.batchTextButton {
+  border: none;
+  background: none;
+  padding: 0;
+  color: #1890ff;
+  font-family: 'PingFang SC', sans-serif;
+  font-size: 14px;
+  line-height: 22px;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.batchTextButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.batchTeacherLink {
+  position: relative;
+  display: inline-block;
+  max-width: 128px;
+  overflow: visible;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-decoration: underline;
+}
+
+.batchTeacherLink img {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  z-index: 5;
+  width: 112px;
+  max-height: 150px;
+  object-fit: cover;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-50%) translateY(4px);
+  transition: opacity 0.15s, transform 0.15s;
+}
+
+.batchTeacherLink:hover img {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+.batchTemplatePicker {
+  position: relative;
+  display: inline-block;
+  max-width: 200px;
+}
+
+.batchTemplatePicker:hover {
+  z-index: 20;
+}
+
+.batchTemplatePicker__trigger {
+  max-width: 200px;
+  min-height: 24px;
+  padding: 1px 20px 1px 8px;
+  border: 1px solid #adc6ff;
+  border-radius: 2px;
+  background: #f0f5ff;
+  color: #2f54eb;
+  font-family: 'PingFang SC', sans-serif;
+  font-size: 12px;
+  line-height: 20px;
+  text-align: left;
+  cursor: pointer;
+  position: relative;
+}
+
+.batchTemplatePicker__trigger::after {
+  content: '';
+  position: absolute;
+  right: 7px;
+  top: 50%;
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid currentColor;
+  transform: translateY(-40%);
+}
+
+.batchTemplatePicker__trigger span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.batchTemplatePicker__hoverPreview {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  z-index: 30;
+  width: 108px;
+  padding: 6px;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(4px);
+  transition: opacity 0.15s, transform 0.15s;
+}
+
+.batchTemplatePicker:hover .batchTemplatePicker__hoverPreview {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.batchTemplatePicker__hoverPreview img {
+  display: block;
+  width: 96px;
+  height: 128px;
+  border-radius: 6px;
+  object-fit: cover;
+}
+
+.batchTemplatePicker__menu {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 6px);
+  z-index: 10;
+  width: 260px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.14);
+}
+
+.batchTemplatePicker__option {
+  width: 100%;
+  min-height: 68px;
+  display: grid;
+  grid-template-columns: 42px 1fr;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: #ffffff;
+  color: var(--color-fontgy-1);
+  font-family: 'PingFang SC', sans-serif;
+  font-size: 13px;
+  line-height: 18px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.batchTemplatePicker__option:hover,
+.batchTemplatePicker__option--active {
+  border-color: #adc6ff;
+  background: #f0f5ff;
+}
+
+.batchTemplatePicker__option img {
+  width: 42px;
+  height: 56px;
+  border-radius: 4px;
+  object-fit: cover;
+  background: #f5f5f5;
+}
+
+.batchTemplatePicker__option span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.batchResultImage {
+  width: 99px;
+  height: 132px;
+  border-radius: 8px;
+  object-fit: cover;
+  display: block;
+}
+
+.batchGenerating {
+  color: var(--color-brand-500);
+}
+
+.batchMuted {
+  color: rgba(24, 144, 255, 0.85);
+}
+
+.batchErrorText {
+  display: inline-block;
+  max-width: 100%;
+  color: #ff4d4f;
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 900px) {
+  .uploadPage {
+    grid-template-columns: 1fr;
+    gap: 32px;
+    padding: 40px 24px;
+  }
+
+  .uploadExample {
+    height: auto;
+  }
+
+  .batchPage {
+    padding: 28px 20px 48px;
+  }
+
+  .batchPage__toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .batchPage__meta {
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .batchPage__meta h2 {
+    max-width: 100%;
+  }
 }
